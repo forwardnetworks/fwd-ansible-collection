@@ -1,6 +1,10 @@
-.idea/
-fwd_virtual/
-fwd-ansible.properties
-fwd-ansible-*.tar
-test.yml
-group_vars/all.yml
+__pycache__/
+*.pyc
+.DS_Store
+.cache/
+.pytest_cache/
+.ansible/
+collections/
+env
+.env
+baselines/

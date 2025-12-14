@@ -1,0 +1,14 @@
+---
+- name: Forward Networks API example
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Read an endpoint (example)
+      forwardnetworks.forward.fwd_api:
+        method: GET
+        path: /api/networks
+      register: out
+
+    - name: Show response
+      ansible.builtin.debug:
+        var: out

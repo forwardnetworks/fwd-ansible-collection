@@ -1,0 +1,16 @@
+---
+- name: Forward Networks snapshots example
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Fetch latest snapshots
+      forwardnetworks.forward.fwd_snapshots:
+        network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+        limit: 5
+        include_archived: true
+      register: snaps
+
+    - name: Show snapshot IDs
+      ansible.builtin.debug:
+        msg: "{{ snaps.snapshots | map(attribute='id') | list }}"
+

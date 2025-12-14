@@ -1,107 +1,70 @@
-[Forward Enterprise](https://www.forwardnetworks.com/network-automation-software/)
-documents, searches, verifies, and predicts the behavior of your network by
-creating an always-accurate software copy of your entire network infrastructure
-for both on-premises and cloud deployments.
+# Forward Networks Ansible Integration (Scaffold)
 
-This repository includes the following Ansible modules to automate interactions
-with a Forward Enterprise instance:
+This repository scaffolds a modern Ansible **Collection** for integrating with the Forward Networks API.
 
-- **forward_check**:     Add/Remove/Verify a provided check
-- **forward_network**:   Get networks from Forward instance
-- **forward_snapshot**:  Collect a new snapshot for a given network, or upload a previously saved one
+- Collection: `forwardnetworks.forward`
+- Modules:
+  - `fwd_api`: generic REST wrapper
+  - `fwd_nqe_query`: NQE query runner
+  - `fwd_devices`: network/snapshot device inventory (GET `/api/networks/{networkId}/devices`)
+  - `fwd_snapshots`: snapshot metadata (GET `/api/networks/{networkId}/snapshots`)
+  - `fwd_snapshot_collect`: trigger/wait for snapshots
+  - `fwd_snapshot_export`: download snapshot archives
+  - `fwd_snapshot_checks`: retrieve existing snapshot checks
+  - `fwd_path_search`: single path search (GET `/api/networks/{networkId}/paths`)
+  - `fwd_path_search_bulk`: run multiple searches (POST `/api/networks/{networkId}/paths-bulk`)
+- Inventory: `forward_networks` dynamic inventory with filter + compose support
+- Filters: `nqe_diff` for comparing NQE query results (pre/post checks)
 
-The instructions below explain how to install the main pre-requisite (the
-fwd-api Python bindings), then set up a Forward properties file.
+## Quick start (development)
 
-**DISCLAIMER**:
-All the code in this repository is distributed with no warranty and no support
-from Forward Networks.
+1) Install Ansible (ansible-core) in a virtualenv.
 
-# Install the ```fwd_api``` python module
+2) Ensure Ansible can find the local collection:
 
-## Get the fwd-api submodules
-
-The fwd-api is a submodule of fwd-ansible.
-Run the following git command and move to the  fwd-api directory:
-```
-git submodule update --init --recursive  
-cd deps/fwd-api
-```
-## Install the python module
-
-You can either scope the installation of the ```fwd_api``` python
-module to a virtual environment or install it system-wide.
-The first is recommended.
-
-### Installing in a virtual env
-Install **virtualenv**
-```
-   pip install virtualenv
-```
-From the ```fwd-api``` directory, create a virtual environment for Python:
-```
-   virtualenv fwd_virtual
-```
-This should produce a folder named ```fwd_virtual```.
-Use the virtual environment by calling:
-```
-   source fwd_virtual/bin/activate
-```
-From this same terminal, follow the instructions in the system-wide
-instructions.
-
-### Installing system-wide
-fwd-api depends on python's request module.  
-To get it, use pip:
-```
-   pip install requests
-```
-After installing requests, use ```setup.py``` to install the fwd_api module.
-From the fwd-api directory, run the install script and return to the original
-top-level repository directory:
-```
-   python setup.py install
-   cd ../..
+```bash
+export ANSIBLE_CONFIG="$PWD/ansible.cfg"
 ```
 
-# Set up local properties file
+3) Run example commands (after sourcing `.env` if desired):
 
-Set up properties file from the sample
-```
-    cp fwd-ansible.properties.sample fwd-ansible.properties
-```
-Fill in the content to match your Forward instance and network:
-
-```
-url = <Forward Enterprise url>  
-username = <username>  
-password = <password>  
-network_name = <Network name>  
+```bash
+make example-api           # fwd_api example
+make example-inventory     # dynamic inventory example
+ansible-playbook -i localhost, examples/get_devices.yml
+ansible-playbook -i localhost, examples/get_snapshots.yml
+ansible-playbook -i localhost, examples/path_search.yml
+ansible-playbook -i localhost, examples/path_search_bulk.yml
+ansible-playbook -i localhost, examples/nqe_intent.yml   # baseline/diff workflow
+ansible-playbook -i localhost, examples/change_control.yml  # snapshot + intent workflow
 ```
 
-Forward modules may take a 'properties_file_path' option to enable overriding
-the default location:
-```properties_file_path: <path to properties file>```
+## Authentication
 
+By default, modules and inventory read credentials from environment variables:
 
-**Note**:
-If a property is both in the properties file and passed to an Ansible module,
-the property passed to the Ansible module will take a higher priority.
+- `FORWARD_BASE_URL` (example: `https://app.forwardnetworks.com`) (alias: `FWD_HOST`)
+- `FORWARD_TOKEN` (token-as-username for HTTP Basic)
+- `FORWARD_USERNAME` / `FORWARD_PASSWORD` (HTTP Basic) (aliases: `FWD_USER` / `FWD_PASS`)
+- `FORWARD_VALIDATE_CERTS` (`true`/`false`, optional)
+- `FORWARD_TIMEOUT` (seconds, optional)
 
-# Try out examples
+Per-task parameters can override env vars.
 
-Check the playbooks in the examples directory to get started.
+Auth is sent as HTTP Basic per the included `openapi.json` (either token-only or username/password).
 
-For example, we recommend:
-```
-     cp examples/network.yml .
-     ansible-playbook network.yml
-```
-... to see a list of networks for your user account.
+## Primary use case: intent checks (pre/post change)
 
-# Provide Feedback
+The collection is designed around Forward Networks intent workflows:
 
-If you're interested in using these modules or have any feedback, please let us know at info@forwardnetworks.com.
+- **Pre-change**: capture baseline with `fwd_nqe_query`, `fwd_devices`, and `fwd_snapshots`.
+- **Change window**: perform your network updates (outside this repo).
+- **Post-change**: re-run the same NQE queries and compare results (use the `nqe_diff` filter). Optionally run path searches (`fwd_path_search` / `fwd_path_search_bulk`) to validate reachability or expected blocks.
 
-We're making this code available to enable early feedback, so that these modules might
-be more actively developed, tested, and even officially supported.
+See `docs/INTENT_CHECKS.md` for a detailed walkthrough and playbook outline.
+
+## Repository layout
+
+- `ansible_collections/forwardnetworks/forward/`: the collection
+- `docs/`: design notes and specs
+- `examples/`: example playbooks and inventory configs

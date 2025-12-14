@@ -1,0 +1,86 @@
+---
+- name: Forward Networks NQE intent baseline + comparison
+  hosts: localhost
+  gather_facts: false
+  vars:
+    network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+    baseline_dir: baselines
+    baseline_file: "{{ baseline_dir }}/nqe_intent.json"
+    queries:
+      - name: "bgp_no_drops"
+        query_id: "bgp_no_drops"
+      - name: "acl_coverage"
+        query_id: "acl_coverage"
+  tasks:
+    - name: Ensure baseline directory exists
+      ansible.builtin.file:
+        path: "{{ baseline_dir }}"
+        state: directory
+
+    - name: Check existing baseline
+      ansible.builtin.stat:
+        path: "{{ baseline_file }}"
+      register: baseline_stat
+
+    - name: Run NQE queries
+      loop: "{{ queries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      forwardnetworks.forward.fwd_nqe_query:
+        network_id: "{{ network_id }}"
+        query_id: "{{ item.query_id }}"
+      register: nqe_results
+
+    - name: Build map of current query results
+      ansible.builtin.set_fact:
+        current_results: "{{ current_results | default({}) | combine({item.item.name: item.result}) }}"
+      loop: "{{ nqe_results.results }}"
+
+    - name: Save baseline if missing
+      when: not baseline_stat.stat.exists
+      ansible.builtin.copy:
+        dest: "{{ baseline_file }}"
+        content: "{{ current_results | to_nice_json }}"
+
+    - name: Load baseline data
+      when: baseline_stat.stat.exists
+      ansible.builtin.slurp:
+        src: "{{ baseline_file }}"
+      register: baseline_raw
+
+    - name: Parse baseline json
+      when: baseline_stat.stat.exists
+      ansible.builtin.set_fact:
+        baseline_results: "{{ baseline_raw.content | b64decode | from_json }}"
+
+    - name: Compare baseline vs current
+      when: baseline_stat.stat.exists
+      vars:
+        baseline_entry: "{{ baseline_results[item.key] | default({'items': []}) }}"
+        current_entry: "{{ item.value | default({'items': []}) }}"
+        baseline_items: "{{ baseline_entry.items | default([]) }}"
+        current_items: "{{ current_entry.items | default([]) }}"
+        diff: "{{ baseline_items | nqe_diff(current_items) }}"
+      ansible.builtin.debug:
+        msg: >
+          Query {{ item.key }} => added={{ diff.added_count }}
+          removed={{ diff.removed_count }} unchanged={{ diff.unchanged_count }}
+      loop: "{{ current_results | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Fail if new violations detected
+      when: baseline_stat.stat.exists
+      vars:
+        baseline_entry: "{{ baseline_results[item.key] | default({'items': []}) }}"
+        current_entry: "{{ item.value | default({'items': []}) }}"
+        baseline_items: "{{ baseline_entry.items | default([]) }}"
+        current_items: "{{ current_entry.items | default([]) }}"
+        diff: "{{ baseline_items | nqe_diff(current_items) }}"
+      ansible.builtin.assert:
+        that:
+          - diff.added_count == 0
+        fail_msg: "New violations detected for {{ item.key }}: {{ diff.added }}"
+      loop: "{{ current_results | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"

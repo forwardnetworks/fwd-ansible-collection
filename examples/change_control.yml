@@ -1,0 +1,90 @@
+---
+- name: Forward Networks change-control workflow (snapshot + checks)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+    queries:
+      - name: "bgp_no_drops"
+        query_id: "bgp_no_drops"
+      - name: "acl_coverage"
+        query_id: "acl_coverage"
+  tasks:
+    - name: Capture current processed snapshot (baseline)
+      forwardnetworks.forward.fwd_snapshot_collect:
+        network_id: "{{ network_id }}"
+        start_collection: false
+        wait_for_new: false
+      register: pre_snapshot
+
+    - name: Fail if no baseline snapshot available
+      ansible.builtin.assert:
+        that:
+          - pre_snapshot.snapshot_id is defined
+          - pre_snapshot.snapshot_id != ''
+        fail_msg: "No processed snapshot available before change"
+
+    - name: Run baseline NQE queries
+      loop: "{{ queries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      forwardnetworks.forward.fwd_nqe_query:
+        network_id: "{{ network_id }}"
+        snapshot_id: "{{ pre_snapshot.snapshot_id }}"
+        query_id: "{{ item.query_id }}"
+      register: baseline_query_runs
+
+    - name: Store baseline results
+      ansible.builtin.set_fact:
+        baseline_data: "{{ baseline_data | default({}) | combine({item.item.name: item.result}) }}"
+      loop: "{{ baseline_query_runs.results }}"
+
+    - name: Placeholder - perform network change
+      ansible.builtin.debug:
+        msg: "Apply network change here"
+
+    - name: Trigger post-change snapshot and wait
+      forwardnetworks.forward.fwd_snapshot_collect:
+        network_id: "{{ network_id }}"
+        previous_snapshot_id: "{{ pre_snapshot.snapshot_id }}"
+        wait_for_new: true
+      register: post_snapshot
+
+    - name: Run post-change NQE queries
+      loop: "{{ queries }}"
+      loop_control:
+        label: "{{ item.name }}"
+      forwardnetworks.forward.fwd_nqe_query:
+        network_id: "{{ network_id }}"
+        snapshot_id: "{{ post_snapshot.snapshot_id }}"
+        query_id: "{{ item.query_id }}"
+      register: post_query_runs
+
+    - name: Store post-change data
+      ansible.builtin.set_fact:
+        post_data: "{{ post_data | default({}) | combine({item.item.name: item.result}) }}"
+      loop: "{{ post_query_runs.results }}"
+
+    - name: Compare baseline vs post-change
+      vars:
+        base_items: "{{ baseline_data[item.key].items | default([]) }}"
+        post_items: "{{ item.value.items | default([]) }}"
+        diff: "{{ base_items | nqe_diff(post_items) }}"
+      ansible.builtin.debug:
+        msg: "Query {{ item.key }} diff => added={{ diff.added_count }} removed={{ diff.removed_count }}"
+      loop: "{{ post_data | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Fail if new violations detected
+      vars:
+        base_items: "{{ baseline_data[item.key].items | default([]) }}"
+        post_items: "{{ item.value.items | default([]) }}"
+        diff: "{{ base_items | nqe_diff(post_items) }}"
+      ansible.builtin.assert:
+        that:
+          - diff.added_count == 0
+        fail_msg: "New violations detected for {{ item.key }}: {{ diff.added }}"
+      loop: "{{ post_data | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"

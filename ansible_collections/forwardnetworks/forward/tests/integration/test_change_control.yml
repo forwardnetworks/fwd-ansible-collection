@@ -1,0 +1,68 @@
+---
+- name: Forward Networks change control integration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    network_id: "{{ lookup('env', 'FWD_NETWORKID') }}"
+    query_id: "{{ lookup('env', 'FWD_QUERYID') | default('', true) }}"
+    dst_ip: "{{ lookup('env', 'FWD_DST_IP') | default('', true) }}"
+    from_device: "{{ lookup('env', 'FWD_FROM_DEVICE') | default('', true) }}"
+    export_dest: "{{ lookup('env', 'FWD_EXPORT_DEST') | default('/tmp/fwd-snapshot.zip', true) }}"
+  tasks:
+    - name: Resolve latest processed snapshot
+      forwardnetworks.forward.fwd_snapshot_collect:
+        network_id: "{{ network_id }}"
+        start_collection: false
+        wait_for_new: false
+      register: snapshot_info
+
+    - name: Set snapshot_id fact
+      ansible.builtin.set_fact:
+        resolved_snapshot_id: "{{ snapshot_info.snapshot_id }}"
+
+    - name: Verify API
+      forwardnetworks.forward.fwd_api:
+        path: /api/networks
+      register: api_result
+
+    - name: Verify devices
+      forwardnetworks.forward.fwd_devices:
+        network_id: "{{ network_id }}"
+        snapshot_id: "{{ resolved_snapshot_id }}"
+        limit: 1
+      register: devices_result
+
+    - name: Verify snapshots metadata
+      forwardnetworks.forward.fwd_snapshots:
+        network_id: "{{ network_id }}"
+        limit: 1
+      register: snapshots_result
+
+    - name: Verify snapshot export (config-only)
+      when: resolved_snapshot_id is defined
+      forwardnetworks.forward.fwd_snapshot_export:
+        snapshot_id: "{{ resolved_snapshot_id }}"
+        dest: "{{ export_dest }}"
+        only: CONFIG
+
+    - name: Verify NQE query
+      when: query_id | length > 0
+      forwardnetworks.forward.fwd_nqe_query:
+        network_id: "{{ network_id }}"
+        snapshot_id: "{{ resolved_snapshot_id }}"
+        query_id: "{{ query_id }}"
+      register: nqe_result
+
+    - name: Verify path search
+      when: (dst_ip | length > 0) and (from_device | length > 0)
+      forwardnetworks.forward.fwd_path_search:
+        network_id: "{{ network_id }}"
+        from_device: "{{ from_device }}"
+        dst_ip: "{{ dst_ip }}"
+      register: path_result
+
+    - name: Verify snapshot checks
+      when: resolved_snapshot_id is defined
+      forwardnetworks.forward.fwd_snapshot_checks:
+        snapshot_id: "{{ resolved_snapshot_id }}"
+      register: checks_result

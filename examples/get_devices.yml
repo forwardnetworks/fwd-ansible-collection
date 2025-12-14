@@ -1,0 +1,16 @@
+---
+- name: Forward Networks devices example
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Fetch core devices with tags
+      forwardnetworks.forward.fwd_devices:
+        network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+        name: "core-*"
+        include_tags: true
+      register: devices
+
+    - name: Show count
+      ansible.builtin.debug:
+        msg: "Found {{ devices.devices | length }} devices"
+

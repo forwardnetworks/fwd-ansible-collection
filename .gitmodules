@@ -1,3 +1,0 @@
-[submodule "deps/fwd-api"]
-	path = deps/fwd-api
-	url = https://github.com/forwardnetworks/fwd-api.git

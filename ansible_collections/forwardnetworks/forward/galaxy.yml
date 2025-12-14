@@ -1,0 +1,16 @@
+namespace: forwardnetworks
+name: forward
+version: 0.1.0
+readme: README.md
+authors:
+  - "Forward Networks (@forwardnetworks)"
+description: "Ansible Collection for Forward Networks API (scaffold)"
+license:
+  - Apache-2.0
+tags:
+  - forward
+  - forwardnetworks
+  - networking
+  - api
+repository: "https://github.com/forwardnetworks/fwd-ansible"
+issues: "https://github.com/forwardnetworks/fwd-ansible/issues"

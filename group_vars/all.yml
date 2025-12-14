@@ -1,3 +1,0 @@
-# Variables used in playbooks with Ansible URI module
-fwd_username: "<forward username>"
-fwd_password: "<forward password>"

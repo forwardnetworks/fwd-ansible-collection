@@ -1,0 +1,10 @@
+{
+    "docs": "https://docs.ansible.com/ansible-core/2.20/dev_guide/testing/sanity/compile.html", 
+    "results": [
+        {
+            "message": "The test `ansible-test sanity --test compile --python 3.12` [[explain](https://docs.ansible.com/ansible-core/2.20/dev_guide/testing/sanity/compile.html)] failed with 1 error:", 
+            "output": "plugins/inventory/forward_networks.py:104:1: SyntaxError: from __future__ import annotations"
+        }
+    ], 
+    "verified": false
+}

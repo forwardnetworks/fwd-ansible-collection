@@ -1,0 +1,10 @@
+{
+    "docs": "https://docs.ansible.com/ansible-core/2.20/dev_guide/testing/sanity/yamllint.html", 
+    "results": [
+        {
+            "message": "The test `ansible-test sanity --test yamllint` [[explain](https://docs.ansible.com/ansible-core/2.20/dev_guide/testing/sanity/yamllint.html)] failed with 4 errors:", 
+            "output": "galaxy.yml:17:1: empty-lines: too many blank lines (1 > 0)\nmeta/runtime.yml:2:1: empty-lines: too many blank lines (1 > 0)\nplugins/modules/fwd_path_search_bulk.py:31:34: error: DOCUMENTATION: syntax error: found character '`' that cannot start any token (syntax)\nplugins/modules/fwd_path_search_bulk.py:31:34: unparsable-with-libyaml: DOCUMENTATION: while scanning for the next token found character that cannot start any token"
+        }
+    ], 
+    "verified": false
+}

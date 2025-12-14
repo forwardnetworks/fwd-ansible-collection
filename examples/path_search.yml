@@ -1,0 +1,19 @@
+---
+- name: Forward Networks path search example
+  hosts: localhost
+  gather_facts: false
+  vars:
+    network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+  tasks:
+    - name: Verify DMZ reachability from edge router
+      forwardnetworks.forward.fwd_path_search:
+        network_id: "{{ network_id }}"
+        from_device: edge-router-1
+        dst_ip: 10.0.50.10
+        intent: PREFER_DELIVERED
+        include_network_functions: false
+      register: dmz_path
+
+    - name: Show path info
+      ansible.builtin.debug:
+        var: dmz_path.paths
