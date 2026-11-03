@@ -79,6 +79,6 @@ Galaxy imports the tarball asynchronously; the import log shows any metadata pro
 
 Things to settle before the first publish:
 
-- **License.** `galaxy.yml` says `Apache-2.0` but every module carries a GPL-3.0-or-later header, which is the Ansible convention for modules. Pick one and make them agree.
+- **License.** GPL-3.0-or-later, matching the module headers (the Ansible convention). `LICENSE` at the repo root and `COPYING` in the collection hold the text.
 - **Python dependency.** Galaxy does not install pip packages. The README and `requirements.txt` say users need `forward-sdk>=0.1.32`; for Execution Environments, `requirements.txt` is picked up by `ansible-builder`.
 - **Private Galaxy / Automation Hub.** Use the same `build` and `publish` with `--server` pointing at your instance.

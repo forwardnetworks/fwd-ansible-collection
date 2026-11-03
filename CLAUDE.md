@@ -43,5 +43,5 @@ Everything under `ansible_collections/forwardnetworks/forward/plugins/`:
 - `fwd_path_search_bulk` posts a `PathSearchBulkRequest` object (`queries` plus shared `intent` and limits), not a bare list. `intent` is per request, never per query.
 - Settled-zero subnet connectivity with `totalSubnetPairs: 0` means nothing was compared, not that nothing changed.
 - `openapi.json` at the repo root is the old spec and is not used by any code; the SDK carries its own.
-- Module GPL headers and `galaxy.yml`'s `Apache-2.0` license disagree; unresolved.
+- License is GPL-3.0-or-later everywhere (`galaxy.yml`, module headers, `COPYING`, root `LICENSE`).
 - The pin is `forward-sdk>=0.1.32` (adds `client.call` and `collect(start=False)`). Check the SDK's changelog and PyPI before using anything newer from `~/src/forward-python-sdk`, which can be ahead of the release.

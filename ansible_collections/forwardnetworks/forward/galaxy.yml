@@ -6,7 +6,7 @@ authors:
   - "Forward Networks (@forwardnetworks)"
 description: "Ansible Collection for Forward Networks, built on forward-sdk: NQE, snapshots, devices, path search, checks, inventory and Forward Predict."
 license:
-  - Apache-2.0
+  - GPL-3.0-or-later
 tags:
   - forward
   - forwardnetworks
