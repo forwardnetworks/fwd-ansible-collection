@@ -8,3 +8,5 @@ collections/
 env
 .env
 baselines/
+ansible_collections/*/*/tests/output/
+.venv/

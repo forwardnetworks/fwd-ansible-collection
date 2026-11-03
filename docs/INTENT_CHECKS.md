@@ -1,81 +1,58 @@
-# Intent / Pre-Post Check Workflow
+# Intent / pre-post check workflow
 
-Primary goal: use Ansible to orchestrate Forward Networks checks before and after a change window.
+Use Ansible to orchestrate Forward checks before and after a change window.
 
-## Workflow (overview)
-
-1. **Pre-change baseline**
-   - Run NQE queries (compliance, coverage, etc.) via `forwardnetworks.forward.fwd_nqe_query`.
-   - Capture results locally (e.g., `set_fact` → `copy` or `ansible.builtin.copy` to disk).
-2. **Change execution**
-   - Apply network changes (outside this collection).
-3. **Post-change validation**
-   - Re-run the same NQE queries and compare to the baseline.
-   - Optionally, run intent-specific APIs:
-     - `forwardnetworks.forward.fwd_devices` to confirm device counts / state.
-     - `forwardnetworks.forward.fwd_snapshots` to ensure snapshot processing completed.
-     - `forwardnetworks.forward.fwd_path_search` to test specific traffic paths.
-4. **Reporting**
-   - Use Ansible `debug`, `assert`, or custom modules/templates to enforce pass/fail.
-
-## Recommended playbook structure
+1. **Pre-change baseline.** Find the baseline snapshot with `fwd_snapshots` (`latest_processed: true`) and run NQE queries against it with `fwd_nqe_query`. Pinning `snapshot_id` keeps the comparison stable.
+2. **Change.** Apply the change (outside this collection).
+3. **Post-change.** `fwd_snapshot_collect` starts a collection and returns the processed snapshot. Re-run the same queries against it and compare with `nqe_diff`.
+4. **Gate.** `assert` on the diff, on `fwd_snapshot_checks` results, and on path searches for flows that must (or must not) be delivered.
 
 ```yaml
 - hosts: localhost
   gather_facts: false
   vars:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') }}"
-    queries:
-      - name: "No BGP session drops"
-        query_id: "bgp_no_drops"
-      - name: "Critical ACL coverage"
-        query_id: "acl_coverage"
+    network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
   tasks:
-    - name: Run baseline queries
-      loop: "{{ queries }}"
-      loop_control:
-        label: "{{ item.name }}"
-      forwardnetworks.forward.fwd_nqe_query:
+    - forwardnetworks.forward.fwd_snapshots:
         network_id: "{{ network_id }}"
-        query_id: "{{ item.query_id }}"
-      register: baseline_results
+        latest_processed: true
+      register: pre
 
-    # ... apply network changes ...
-
-    - name: Run post-change queries
-      loop: "{{ queries }}"
-      loop_control:
-        label: "{{ item.name }}"
-      forwardnetworks.forward.fwd_nqe_query:
+    - forwardnetworks.forward.fwd_nqe_query:
         network_id: "{{ network_id }}"
-        query_id: "{{ item.query_id }}"
-      register: post_results
+        snapshot_id: "{{ pre.snapshot_id }}"
+        query_path: /Audits/BGP
+      register: before
 
-    - name: Compare results (simplistic example)
-      vars:
-        baseline_rows: "{{ baseline_results.results[0].result.items }}"
-        post_rows: "{{ post_results.results[0].result.items }}"
-        diff: "{{ baseline_rows | nqe_diff(post_rows) }}"
-      ansible.builtin.assert:
-        that:
-          - diff.added_count == 0
-        fail_msg: "New violations detected: {{ diff.added }}"
+    # ... apply the change ...
+
+    - forwardnetworks.forward.fwd_snapshot_collect:
+        network_id: "{{ network_id }}"
+      register: post
+
+    - forwardnetworks.forward.fwd_nqe_query:
+        network_id: "{{ network_id }}"
+        snapshot_id: "{{ post.snapshot_id }}"
+        query_path: /Audits/BGP
+      register: after
+
+    - ansible.builtin.assert:
+        that: (before.rows | forwardnetworks.forward.nqe_diff(after.rows)).added_count == 0
+        fail_msg: "New violations after the change"
 ```
 
 ## Path search checks
 
-- Use `forwardnetworks.forward.fwd_path_search` to validate reachability or explicit blocks.
-- Tips:
-  - When traffic should succeed, set `intent: PREFER_DELIVERED` and assert at least one path exists.
-  - When traffic should fail, set `intent: VIOLATIONS_ONLY` or `PREFER_VIOLATIONS` and assert violation reasons match expectations.
-  - Combine with `max_results` and `include_network_functions` to tune response verbosity/performance.
-- For multiple flows, prefer `forwardnetworks.forward.fwd_path_search_bulk` so the API evaluates them in a single call.
-- Use `forwardnetworks.forward.fwd_snapshot_collect` to trigger and wait for snapshots as part of pre/post change workflows.
+- Traffic that should succeed: `intent: PREFER_DELIVERED`, assert at least one path.
+- Traffic that should be blocked: `intent: VIOLATIONS_ONLY` returns only non-delivered paths, so assert one exists. `PREFER_VIOLATIONS` finds drops, loops and blackholes first.
+- Several flows: `fwd_path_search_bulk` evaluates them in one call. `intent` and the limits apply to the whole call.
 
-## Next steps
+## Checking before you change
 
-- Provide fixtures/examples to store baseline outputs in a Git repo or artifact storage.
-- Expand `fwd_path_search_bulk` examples (naming flows, gating via asserts).
-- Use the sample playbooks:
-  - `examples/nqe_intent.yml` for baseline/diff storage.
-  - `examples/change_control.yml` for snapshot-triggered pre/post comparisons.
+With Forward Predict you can rehearse the change first: stage it with `fwd_change_set`, run `fwd_predict`, then read `fwd_predict_diff` and `fwd_snapshot_checks` on the predicted snapshot. See `examples/predict_change.yml`.
+
+## Examples
+
+- `examples/nqe_intent.yml`: store a baseline on disk and diff later runs against it.
+- `examples/change_control.yml`: baseline, collect, compare, check gate.
+- `examples/predict_change.yml`: rehearse a change in Predict.

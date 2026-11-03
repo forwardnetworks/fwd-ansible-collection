@@ -5,7 +5,7 @@
   tasks:
     - name: Fetch latest snapshots
       forwardnetworks.forward.fwd_snapshots:
-        network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+        network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
         limit: 5
         include_archived: true
       register: snaps

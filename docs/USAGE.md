@@ -1,185 +1,87 @@
 # Usage
 
-## Module: `forwardnetworks.forward.fwd_api`
+Option-level documentation lives with each plugin: `ansible-doc forwardnetworks.forward.fwd_devices`, and `ansible-doc -t inventory forwardnetworks.forward.forward_networks`. This page covers what the docs do not: how the pieces fit and what to watch for.
 
-Example:
+## Connection
+
+All modules share `base_url`, `username`, `password`, `validate_certs` and `timeout`, each falling back to the `FORWARD_*` environment variables (see the README). `network_id` falls back to `FORWARD_NETWORK_ID`. A missing `forward-sdk` fails the task with an install hint naming the Python interpreter Ansible used; if the SDK is installed in a virtualenv, set `ansible_python_interpreter` to it.
+
+## Snapshots and baselines
+
+- `fwd_snapshots` with `latest_processed: true` returns the newest processed snapshot **excluding predictions**. Once Predict is in use, the newest processed snapshot is often a prediction, and using one as a baseline compares a change against a change.
+- `fwd_snapshot_collect` waits for the collection and for the snapshot to process, ignoring predictions, and returns `snapshot_id`. `start_collection: false` waits on a collection already queued or running instead (and fails if there is none). `wait: false` returns right after queueing, with no snapshot ID.
+- Omit `snapshot_id` on NQE, devices and path search to use the network's latest processed snapshot. Pin it in change-control playbooks so a later collection cannot change what you compare.
+
+## NQE
+
+`fwd_nqe_query` takes exactly one of `query` (inline source), `query_id` or `query_path`, and returns all rows in `rows`. `parameters` fills a query's declared parameters; `commit_id` pins a query version (full 40 character hash). Paging is handled by the SDK, which fails loudly on a result set that ends early rather than returning a partial answer.
+
+Compare two result lists with the filter:
 
 ```yaml
-- name: Call Forward API
-  forwardnetworks.forward.fwd_api:
-    path: /api/example
-    method: GET
-  register: out
-
-- debug:
-    var: out.json
+diff: "{{ baseline.rows | forwardnetworks.forward.nqe_diff(post.rows) }}"
+# diff.added, diff.removed, diff.unchanged and the matching *_count fields
 ```
 
-Auth via env vars:
+## Path search
 
-```bash
-export FORWARD_BASE_URL="https://app.forwardnetworks.com"
-export FORWARD_TOKEN="..."   # or set FORWARD_USERNAME/FORWARD_PASSWORD
+`fwd_path_search` needs `dst_ip` and one of `from_device` or `src_ip`. In `fwd_path_search_bulk`, `intent`, `max_results` and the other limits apply to the whole request; per-query keys are the flow fields (`from_device`, `src_ip`, `dst_ip`, ports, protocol and so on), plus an optional `name` label that is not sent. Flows needing different intents are separate calls.
+
+## Forward Predict
+
+Predict rehearses a change without touching a device:
+
+1. `fwd_change_set` creates a change set from a baseline snapshot, stages CLI `commands` per device and commits. Reusing `change_set_id` stages into an existing one; omitting it creates a new one each run.
+2. `fwd_predict` runs Predict and returns the predicted `snapshot_id`.
+3. `fwd_predict_diff` compares baseline and prediction: per-area counts, and subnet connectivity (polled until Forward finishes computing it).
+4. `fwd_snapshot_checks` or `fwd_change_set_checks` read intent results against the prediction.
+5. `fwd_change_set` with `state: absent` cleans up, which also deletes the predicted snapshots.
+
+Things to know, from the SDK's Predict notes:
+
+- The Predict endpoints are unpublished and gated by organization properties and roles. A missing licence or permission arrives as an HTTP error; `fwd_predict_diff` reports a gated area in `errors` instead of failing.
+- Connectivity zeros while Forward is still computing mean "not finished". `fwd_predict_diff` waits, but a settled zero with `totalSubnetPairs: 0` means no locations are defined and nothing was compared. That is not an all-clear.
+- PAN-OS firewalls cannot be changed with CLI commands (prediction fails at processing). Use the SDK's firewall Predict operations through `fwd_api`.
+- A prediction over a stale base can fail with no reason; reprocess the base and predict again.
+
+See the SDK's [Predict guide](https://forwardnetworks.github.io/forward-python-sdk/predict/) for gating properties and caveats.
+
+## Generic calls with `fwd_api`
+
+Any Forward operation without a dedicated module: name it by operation ID and pass `arguments` in the SDK's snake_case names (plus `body` for a request body).
+
+```yaml
+- forwardnetworks.forward.fwd_api:
+    operation: getChecks
+    arguments: {snapshot_id: "1234", status: [FAIL]}
 ```
 
-## Inventory plugin: `forwardnetworks.forward.forward_networks`
+`network_id` and `snapshot_id` default from the module options or environment. An unknown ID fails with the nearest names; streaming downloads are refused. In check mode only `get*`, `list*`, `find*` and `search*` operations run.
 
-Create `inventory.forward.yml`:
+## Inventory
 
 ```yaml
 plugin: forwardnetworks.forward.forward_networks
-network_id: "<your network id>"
-host_key: "name"
-# Optional filters (same keys as the fwd_devices module):
-filters:
-  name: "core-*"
+network_id: "101"
 include_tags: true
+filters: {vendor: CISCO}
+keyed_groups:
+  - key: vendor
+    prefix: vendor
 ```
 
-Then:
+Every device field becomes a host variable. Enable the plugin in `ansible.cfg` if it is not picked up (`enable_plugins = ..., forwardnetworks.forward.forward_networks`); the source file name must end in `forward.yml` or `forward.yaml`.
 
-```bash
-ansible-inventory -i inventory.forward.yml --graph
-```
+## Managing Forward objects
 
-## Module: `forwardnetworks.forward.fwd_nqe_query`
+- `fwd_network` ensures a network exists by name (or deletes one); `fwd_networks` lists and filters. Deleting a network deletes its snapshots.
+- `fwd_device_tag` is idempotent: it creates the tag, adds only devices that lack it, and with `exclusive: true` removes it from others. Without `devices`, `state: absent` deletes the tag.
+- `fwd_location`, `fwd_collection_schedule` and `fwd_webhook` correct only the fields you set. Schedules have no name, so reruns match on identical settings or an explicit `schedule_id`. A webhook password cannot be read back, so it is sent on create or when other fields change, or on every run with `update_password: always`.
+- `fwd_snapshot_upload` pushes ZIP archives into a network and waits for processing; `fwd_snapshot` deletes, reprocesses or annotates an existing one.
+- `fwd_nqe_library` publishes queries to the library in one commit, skipping unchanged ones. Validate with `dry_run_snapshot_id`. `fwd_nqe_diff` compares a *committed* query across two snapshots.
 
-```yaml
-- name: Run an NQE query (endpoint is an example)
-  forwardnetworks.forward.fwd_nqe_query:
-    network_id: "123"
-    query_id: "abcd"
-    parameters: {}
-    options: {}
-  register: out
+Other Forward operations (locations, collection schedules, webhooks, credentials and the rest) are reachable with `fwd_api` until they get a dedicated module.
 
-- debug:
-    var: out.result
-```
+## Check mode
 
-## Module: `forwardnetworks.forward.fwd_devices`
-
-```yaml
-- name: Fetch devices with tags for a snapshot
-  forwardnetworks.forward.fwd_devices:
-    network_id: "205507"
-    snapshot_id: "snap-123"
-    name: "core-*"
-    include_tags: true
-  register: devices
-
-- debug:
-    msg: "Found {{ devices.devices | length }} devices"
-```
-
-## Module: `forwardnetworks.forward.fwd_snapshots`
-
-```yaml
-- name: List snapshots (latest five, include archived)
-  forwardnetworks.forward.fwd_snapshots:
-    network_id: "205507"
-    limit: 5
-    include_archived: true
-    min_successful_devices: 500
-  register: snaps
-
-- debug:
-    var: snaps.snapshots
-```
-
-## Module: `forwardnetworks.forward.fwd_snapshot_collect`
-
-```yaml
-- name: Trigger snapshot and wait for completion
-  forwardnetworks.forward.fwd_snapshot_collect:
-    network_id: "205507"
-    wait_timeout: 1200
-  register: snap_run
-
-- debug:
-    msg: "Snapshot {{ snap_run.snapshot_id }} is ready"
-```
-
-- debug:
-    msg: "Snapshot {{ snap_run.snapshot_id }} is ready"
-```
-
-## Module: `forwardnetworks.forward.fwd_snapshot_export`
-
-```yaml
-- name: Download snapshot archive
-  forwardnetworks.forward.fwd_snapshot_export:
-    snapshot_id: "snap-123"
-    dest: "/tmp/snap-123.zip"
-
-- name: Download config-only archive
-  forwardnetworks.forward.fwd_snapshot_export:
-    snapshot_id: "snap-123"
-    dest: "/tmp/snap-config.zip"
-    only: CONFIG
-```
-
-## Module: `forwardnetworks.forward.fwd_snapshot_checks`
-
-```yaml
-- name: List failed checks for a snapshot
-  forwardnetworks.forward.fwd_snapshot_checks:
-    snapshot_id: "snap-123"
-    status: ["FAIL"]
-  register: failed_checks
-
-- name: Fetch a specific check
-  forwardnetworks.forward.fwd_snapshot_checks:
-    snapshot_id: "snap-123"
-    check_id: "19939965"
-  register: single_check
-```
-
-## Module: `forwardnetworks.forward.fwd_path_search`
-
-```yaml
-- name: Path search example
-  forwardnetworks.forward.fwd_path_search:
-    network_id: "205507"
-    from_device: "edge-router-1"
-    dst_ip: "10.0.50.10"
-    intent: PREFER_DELIVERED
-  register: path_result
-
-- debug:
-    var: path_result.paths
-```
-
-## Module: `forwardnetworks.forward.fwd_path_search_bulk`
-
-```yaml
-- name: Evaluate flows
-  forwardnetworks.forward.fwd_path_search_bulk:
-    network_id: "205507"
-    queries:
-      - name: dmz_reachability
-        from_device: edge-router-1
-        dst_ip: 10.0.50.10
-      - name: db_block
-        src_ip: 10.20.30.0/24
-        dst_ip: 172.16.5.10
-        intent: VIOLATIONS_ONLY
-  register: bulk_paths
-
-- debug:
-    var: bulk_paths.results
-```
-
-## Filter: `nqe_diff`
-
-```yaml
-- name: Compare NQE results
-  vars:
-    baseline: "{{ baseline_results.results[0].result.items }}"
-    post: "{{ post_results.results[0].result.items }}"
-    diff: "{{ baseline | nqe_diff(post) }}"
-  ansible.builtin.debug:
-    msg: >
-      Added={{ diff.added_count }} Removed={{ diff.removed_count }}
-      Unchanged={{ diff.unchanged_count }}
-```
+Read-only modules run in check mode. Modules that change something (`fwd_snapshot_collect`, `fwd_snapshot_export`, `fwd_snapshot_upload`, `fwd_snapshot`, `fwd_network`, `fwd_device_tag`, `fwd_location`, `fwd_collection_schedule`, `fwd_webhook`, `fwd_nqe_library`, `fwd_change_set`, `fwd_predict`) report `changed` and do nothing.

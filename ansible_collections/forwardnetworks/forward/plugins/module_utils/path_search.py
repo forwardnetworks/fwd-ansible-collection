@@ -1,10 +1,14 @@
+# -*- coding: utf-8 -*-
+# Copyright: (c) 2024, Forward Networks
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+"""Helpers for building the body of Forward's bulk path search (``PathSearchBulkRequest``)."""
 from __future__ import annotations
 
-PATH_OPTION_TO_QUERY = {
+# Fields of a single query inside ``queries`` (``PathSearchQuery``): snake_case option -> API name.
+QUERY_FIELDS = {
     "from_device": "from",
     "src_ip": "srcIp",
     "dst_ip": "dstIp",
-    "intent": "intent",
     "ip_proto": "ipProto",
     "src_port": "srcPort",
     "dst_port": "dstPort",
@@ -19,6 +23,11 @@ PATH_OPTION_TO_QUERY = {
     "user_id": "userId",
     "user_group_id": "userGroupId",
     "url": "url",
+}
+
+# Settings that apply to the whole request and sit beside ``queries``.
+SHARED_FIELDS = {
+    "intent": "intent",
     "include_tags": "includeTags",
     "include_network_functions": "includeNetworkFunctions",
     "max_candidates": "maxCandidates",
@@ -28,27 +37,31 @@ PATH_OPTION_TO_QUERY = {
 }
 
 
-def build_path_query(params: dict, extra_params: dict | None = None, include_snapshot: bool = True) -> dict:
+def build_query_entry(query):
+    """Convert one query's snake_case options into a ``PathSearchQuery`` dict."""
+    return {api: query[option] for option, api in QUERY_FIELDS.items() if query.get(option) is not None}
+
+
+def validate_query(query, index):
+    """Return an error message for an unusable query entry, or ``None``.
+
+    A ``name`` key is allowed as a label for the caller and is not sent to Forward.
     """
-    Build query parameters for Forward path search endpoints.
+    if not query.get("dst_ip"):
+        return "queries[%d]: dst_ip is required" % index
+    if not (query.get("from_device") or query.get("src_ip")):
+        return "queries[%d]: either from_device or src_ip is required" % index
+    unknown = sorted(set(query) - set(QUERY_FIELDS) - {"name"})
+    if unknown:
+        return "queries[%d]: unknown option(s): %s" % (index, ", ".join(unknown))
+    return None
 
-    :param params: module params containing snake_case options.
-    :param extra_params: dict of additional query parameters to merge (strings only).
-    :param include_snapshot: whether to include snapshot_id in the result.
-    """
-    query = {}
 
-    for option, api_field in PATH_OPTION_TO_QUERY.items():
-        value = params.get(option)
-        if value is None:
-            continue
-        query[api_field] = value
-
-    if include_snapshot and params.get("snapshot_id"):
-        query["snapshotId"] = params["snapshot_id"]
-
-    extra = extra_params or params.get("extra_params") or {}
-    for key, value in extra.items():
-        query[key] = value
-
-    return query
+def build_bulk_body(queries, shared):
+    """Build a ``PathSearchBulkRequest`` from per-query options and shared settings."""
+    body = {"queries": [build_query_entry(q) for q in queries]}
+    for option, api in SHARED_FIELDS.items():
+        value = shared.get(option)
+        if value is not None:
+            body[api] = value
+    return body

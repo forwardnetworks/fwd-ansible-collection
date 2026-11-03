@@ -1,16 +1,24 @@
 namespace: forwardnetworks
 name: forward
-version: 0.1.0
+version: 0.2.0
 readme: README.md
 authors:
   - "Forward Networks (@forwardnetworks)"
-description: "Ansible Collection for Forward Networks API (scaffold)"
+description: "Ansible Collection for Forward Networks, built on forward-sdk: NQE, snapshots, devices, path search, checks, inventory and Forward Predict."
 license:
-  - Apache-2.0
+  - GPL-3.0-or-later
 tags:
   - forward
   - forwardnetworks
   - networking
+  - nqe
+  - predict
   - api
-repository: "https://github.com/forwardnetworks/fwd-ansible"
-issues: "https://github.com/forwardnetworks/fwd-ansible/issues"
+repository: "https://github.com/forwardnetworks/fwd-ansible-collection"
+issues: "https://github.com/forwardnetworks/fwd-ansible-collection/issues"
+homepage: "https://github.com/forwardnetworks/fwd-ansible-collection"
+documentation: "https://github.com/forwardnetworks/fwd-ansible-collection/blob/master/docs/USAGE.md"
+build_ignore:
+  - tests/output
+  - "*.tar.gz"
+  - .venv

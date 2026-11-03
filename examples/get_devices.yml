@@ -5,7 +5,7 @@
   tasks:
     - name: Fetch core devices with tags
       forwardnetworks.forward.fwd_devices:
-        network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+        network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
         name: "core-*"
         include_tags: true
       register: devices

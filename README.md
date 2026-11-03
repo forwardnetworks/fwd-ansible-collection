@@ -1,70 +1,94 @@
-# Forward Networks Ansible Integration (Scaffold)
+# Forward Networks Ansible Collection
 
-This repository scaffolds a modern Ansible **Collection** for integrating with the Forward Networks API.
+Ansible collection `forwardnetworks.forward` for the [Forward Networks](https://www.forwardnetworks.com/) API, built on [forward-sdk](https://github.com/forwardnetworks/forward-python-sdk). The collection holds no HTTP client of its own: every module and the inventory plugin call the SDK, so retries, rate limiting, paging guard rails and snapshot waiting come from there.
 
-- Collection: `forwardnetworks.forward`
-- Modules:
-  - `fwd_api`: generic REST wrapper
-  - `fwd_nqe_query`: NQE query runner
-  - `fwd_devices`: network/snapshot device inventory (GET `/api/networks/{networkId}/devices`)
-  - `fwd_snapshots`: snapshot metadata (GET `/api/networks/{networkId}/snapshots`)
-  - `fwd_snapshot_collect`: trigger/wait for snapshots
-  - `fwd_snapshot_export`: download snapshot archives
-  - `fwd_snapshot_checks`: retrieve existing snapshot checks
-  - `fwd_path_search`: single path search (GET `/api/networks/{networkId}/paths`)
-  - `fwd_path_search_bulk`: run multiple searches (POST `/api/networks/{networkId}/paths-bulk`)
-- Inventory: `forward_networks` dynamic inventory with filter + compose support
-- Filters: `nqe_diff` for comparing NQE query results (pre/post checks)
+> A Forward Networks field integration, not a supported Forward Networks product. See the SDK README for what that means.
 
-## Quick start (development)
-
-1) Install Ansible (ansible-core) in a virtualenv.
-
-2) Ensure Ansible can find the local collection:
+## Install
 
 ```bash
-export ANSIBLE_CONFIG="$PWD/ansible.cfg"
+pip install "forward-sdk>=0.1.32"      # in the Python environment Ansible uses (Python 3.10+)
+ansible-galaxy collection install forwardnetworks.forward
 ```
 
-3) Run example commands (after sourcing `.env` if desired):
+The modules call the Forward API, not your devices, so run them on a host that can reach Forward, normally `localhost` with `connection: local`. Needs ansible-core 2.17 or newer (tested on 2.17 to 2.22).
 
-```bash
-make example-api           # fwd_api example
-make example-inventory     # dynamic inventory example
-ansible-playbook -i localhost, examples/get_devices.yml
-ansible-playbook -i localhost, examples/get_snapshots.yml
-ansible-playbook -i localhost, examples/path_search.yml
-ansible-playbook -i localhost, examples/path_search_bulk.yml
-ansible-playbook -i localhost, examples/nqe_intent.yml   # baseline/diff workflow
-ansible-playbook -i localhost, examples/change_control.yml  # snapshot + intent workflow
+## What is in it
+
+| Plugin | What it does |
+| --- | --- |
+| `fwd_nqe_query` | Run an NQE query (inline, by ID, or by library path) and return every row |
+| `fwd_devices` | List devices in a snapshot, with filters and tags |
+| `fwd_snapshots` | List snapshots, or find the latest processed one (predictions excluded) |
+| `fwd_snapshot_collect` | Start a collection and wait for the processed snapshot |
+| `fwd_snapshot_export` | Download a snapshot archive |
+| `fwd_snapshot_upload` | Upload snapshot archives into a network, and wait for processing |
+| `fwd_snapshot` | Delete, reprocess or annotate a snapshot |
+| `fwd_snapshot_checks` | Read intent check results for a snapshot |
+| `fwd_nqe_diff` | Diff a committed NQE query's results between two snapshots |
+| `fwd_nqe_library` | Publish NQE queries (inline or from `.nqe` files) to the query library |
+| `fwd_networks` / `fwd_network` | List networks; create or delete one (idempotent by name) |
+| `fwd_device_tag` | Manage device tags and their membership (idempotent) |
+| `fwd_location` | Create, correct or delete a map location (idempotent by name) |
+| `fwd_collection_schedule` | Manage scheduled collections (matches identical settings, or an ID) |
+| `fwd_webhook` | Manage webhooks (idempotent by name; the password is write-only, see `update_password`) |
+| `fwd_path_search` / `fwd_path_search_bulk` | Trace one packet, or many flows in one call |
+| `fwd_change_set` | Create, stage and commit a Forward Predict change set |
+| `fwd_predict` | Run Predict and get the predicted snapshot |
+| `fwd_predict_diff` | Blast radius of a change: per-area diff counts and subnet connectivity |
+| `fwd_change_set_checks` | Intent check results for a change set |
+| `fwd_api` | Escape hatch: call any Forward operation by its operation ID |
+| `forward_networks` (inventory) | Build inventory from Forward devices, with `compose`, `groups`, `keyed_groups` |
+| `nqe_diff` (filter) | Compare two NQE result lists (pre/post checks) |
+
+Full option docs: `ansible-doc forwardnetworks.forward.fwd_nqe_query` (and so on).
+
+## Configuration
+
+Credentials are an API token: its access key is the username, its secret the password. Settings resolve as task option, then environment, then the collection's older names.
+
+| Variable | Meaning |
+| --- | --- |
+| `FORWARD_URL` | Instance URL (aliases `FORWARD_BASE_URL`, `FWD_HOST`) |
+| `FORWARD_USERNAME` / `FORWARD_PASSWORD` | Token access key and secret (aliases `FWD_USER` / `FWD_PASS`) |
+| `FORWARD_NETWORK_ID` | Default network, so modules can omit `network_id` |
+| `FORWARD_VERIFY_TLS` | `false`, or a CA bundle path for a private CA (alias `FORWARD_VALIDATE_CERTS`) |
+| `FORWARD_TIMEOUT`, `FORWARD_RETRIES`, `FORWARD_RATE_LIMIT_RPM` | Passed to the SDK |
+
+Per-task `base_url`, `username`, `password`, `validate_certs` and `timeout` override these. Copy `.env.example` to `.env` for local work.
+
+## Quick start
+
+```yaml
+- hosts: localhost
+  gather_facts: false
+  tasks:
+    - forwardnetworks.forward.fwd_snapshots:
+        network_id: "101"
+        latest_processed: true
+      register: baseline
+
+    - forwardnetworks.forward.fwd_nqe_query:
+        network_id: "101"
+        snapshot_id: "{{ baseline.snapshot_id }}"
+        query: |
+          foreach device in network.devices
+          select {name: device.name, platform: device.platform}
+      register: devices
 ```
 
-## Authentication
+## Main use cases
 
-By default, modules and inventory read credentials from environment variables:
+- **Intent checks around a change window**: baseline NQE queries, change, collect a new snapshot, re-run and compare with `nqe_diff`. See [docs/INTENT_CHECKS.md](docs/INTENT_CHECKS.md) and `examples/change_control.yml`.
+- **Forward Predict**: rehearse a change before touching the network. See `examples/predict_change.yml`.
+- **Inventory**: `examples/inventory.forward.yml`.
 
-- `FORWARD_BASE_URL` (example: `https://app.forwardnetworks.com`) (alias: `FWD_HOST`)
-- `FORWARD_TOKEN` (token-as-username for HTTP Basic)
-- `FORWARD_USERNAME` / `FORWARD_PASSWORD` (HTTP Basic) (aliases: `FWD_USER` / `FWD_PASS`)
-- `FORWARD_VALIDATE_CERTS` (`true`/`false`, optional)
-- `FORWARD_TIMEOUT` (seconds, optional)
+Examples run from the repo root: `ansible.cfg` points Ansible at the local collection, so nothing needs installing.
 
-Per-task parameters can override env vars.
-
-Auth is sent as HTTP Basic per the included `openapi.json` (either token-only or username/password).
-
-## Primary use case: intent checks (pre/post change)
-
-The collection is designed around Forward Networks intent workflows:
-
-- **Pre-change**: capture baseline with `fwd_nqe_query`, `fwd_devices`, and `fwd_snapshots`.
-- **Change window**: perform your network updates (outside this repo).
-- **Post-change**: re-run the same NQE queries and compare results (use the `nqe_diff` filter). Optionally run path searches (`fwd_path_search` / `fwd_path_search_bulk`) to validate reachability or expected blocks.
-
-See `docs/INTENT_CHECKS.md` for a detailed walkthrough and playbook outline.
-
-## Repository layout
+## Layout
 
 - `ansible_collections/forwardnetworks/forward/`: the collection
-- `docs/`: design notes and specs
-- `examples/`: example playbooks and inventory configs
+- `docs/`: usage, intent-check workflow, development and publishing notes
+- `examples/`: example playbooks and inventory
+
+Development: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Changes: [CHANGELOG.md](CHANGELOG.md).

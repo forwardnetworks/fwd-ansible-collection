@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: false
   vars:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
+    network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
   tasks:
     - name: Verify DMZ reachability from edge router
       forwardnetworks.forward.fwd_path_search:

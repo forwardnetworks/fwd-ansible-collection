@@ -3,35 +3,34 @@
   hosts: localhost
   gather_facts: false
   vars:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') or '205507' }}"
-    flows:
-      - name: dmz_reachability
-        from_device: edge-router-1
-        dst_ip: 10.0.50.10
-        intent: PREFER_DELIVERED
-      - name: app_blocked_from_db
-        src_ip: 10.20.30.0/24
-        dst_ip: 172.16.5.10
-        intent: VIOLATIONS_ONLY
+    network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
   tasks:
-    - name: Run bulk path search
+    # intent applies to the whole request, so flows that need different intents are separate calls.
+    - name: Flows that must be delivered
       forwardnetworks.forward.fwd_path_search_bulk:
         network_id: "{{ network_id }}"
-        queries: "{{ flows }}"
-      register: bulk_paths
+        intent: PREFER_DELIVERED
+        queries:
+          - {name: dmz_reachability, from_device: edge-router-1, dst_ip: 10.0.50.10}
+      register: must_deliver
+
+    - name: Flows that must stay blocked
+      forwardnetworks.forward.fwd_path_search_bulk:
+        network_id: "{{ network_id }}"
+        intent: VIOLATIONS_ONLY
+        queries:
+          - {name: app_blocked_from_db, src_ip: 10.20.30.0/24, dst_ip: 172.16.5.10}
+      register: must_block
 
     - name: Assert DMZ reachable
-      vars:
-        dmz_result: "{{ bulk_paths.results[0] }}"
       ansible.builtin.assert:
         that:
-          - (dmz_result.paths | length) > 0
+          - (must_deliver.results[0].paths | length) > 0
         fail_msg: "No path found for DMZ flow"
 
-    - name: Assert app to DB remains blocked
-      vars:
-        block_result: "{{ bulk_paths.results[1] }}"
+    - name: Assert app to DB is not delivered
       ansible.builtin.assert:
         that:
-          - (block_result.paths | length) == 0
-        fail_msg: "Unexpected delivery path for blocked flow"
+          # VIOLATIONS_ONLY returns only paths that are not delivered, so any path found is a block.
+          - (must_block.results[0].paths | length) > 0
+        fail_msg: "Expected the app to DB flow to be blocked, but found no non-delivered path"

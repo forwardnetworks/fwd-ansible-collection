@@ -2,53 +2,43 @@
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2024, Forward Networks
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: fwd_snapshot_export
-short_description: Export Forward Networks snapshots to a ZIP file
+short_description: Download a Forward Networks snapshot archive
 description:
-  - Downloads a snapshot archive via C(/api/snapshots/{snapshotId}).
-  - Supports exporting the full snapshot, configuration-only archives, or filtered/obfuscated subsets using POST.
+  - Downloads a snapshot as a ZIP archive to a local file.
+  - With no device or obfuscation options this is the whole snapshot; any of them selects Forward's subset export.
 extends_documentation_fragment:
   - forwardnetworks.forward.auth
 options:
   snapshot_id:
-    description: Forward snapshot identifier to export.
+    description: Snapshot to export.
     type: str
     required: true
   dest:
-    description: Local path to write the exported ZIP file.
+    description: Destination file path on the host running the module.
     type: path
     required: true
   only:
-    description:
-      - Optional filter for GET exports.
-      - Use C(CONFIG) to include only device configuration files.
+    description: Restrict the export, for example to device configurations.
     type: str
     choices: [CONFIG]
   include_devices:
-    description:
-      - Device names to include when generating a custom export (POST).
-      - Mutually exclusive with C(exclude_devices).
+    description: Export only these devices (globs such as C(pa*) are accepted). Exclusive with O(exclude_devices).
     type: list
     elements: str
   exclude_devices:
-    description:
-      - Device names to exclude when generating a custom export (POST).
-      - Mutually exclusive with C(include_devices).
+    description: Export everything except these devices. Exclusive with O(include_devices).
     type: list
     elements: str
   obfuscation_key:
-    description:
-      - Optional obfuscation key for POST exports.
-      - See Forward documentation on snapshot obfuscation.
+    description: Obfuscate sensitive data, keyed by this value.
     type: str
   force:
-    description:
-      - Overwrite the destination file if it exists.
+    description: Overwrite O(dest) if it exists. When C(false) an existing file is left alone and nothing changes.
     type: bool
     default: true
 author:
@@ -56,39 +46,21 @@ author:
 """
 
 EXAMPLES = r"""
-- name: Download entire snapshot
+- name: Archive a snapshot's configs
   forwardnetworks.forward.fwd_snapshot_export:
-    snapshot_id: "snap-123"
-    dest: "/tmp/snap-123.zip"
-
-- name: Download config-only snapshot
-  forwardnetworks.forward.fwd_snapshot_export:
-    snapshot_id: "snap-123"
-    dest: "/tmp/snap-123-configs.zip"
+    snapshot_id: "1234"
+    dest: /var/backups/forward/1234.zip
     only: CONFIG
-
-- name: Download custom subset (POST)
-  forwardnetworks.forward.fwd_snapshot_export:
-    snapshot_id: "snap-123"
-    dest: "/tmp/snap-123-core.zip"
-    include_devices:
-      - edge-1
-      - core-1
-    obfuscation_key: secret
 """
 
 RETURN = r"""
 dest:
-  description: Destination file path containing the ZIP archive.
+  description: Path of the archive.
   type: str
   returned: always
 snapshot_id:
-  description: Snapshot identifier that was exported.
+  description: Snapshot that was exported.
   type: str
-  returned: always
-changed:
-  description: Whether the destination file was (re)written.
-  type: bool
   returned: always
 """
 
@@ -97,19 +69,17 @@ import tempfile
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.client import ForwardApiError, ForwardClient
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.config import get_forward_config
+from ansible_collections.forwardnetworks.forward.plugins.module_utils import sdk
 
 
 def main():
     module = AnsibleModule(
         argument_spec={
             "base_url": {"type": "str"},
-            "token": {"type": "str", "no_log": True},
             "username": {"type": "str"},
             "password": {"type": "str", "no_log": True},
-            "validate_certs": {"type": "bool", "default": True},
-            "timeout": {"type": "int", "default": 30},
+            "validate_certs": {"type": "bool"},
+            "timeout": {"type": "float"},
             "snapshot_id": {"type": "str", "required": True},
             "dest": {"type": "path", "required": True},
             "only": {"type": "str", "choices": ["CONFIG"]},
@@ -121,68 +91,40 @@ def main():
         mutually_exclusive=[("include_devices", "exclude_devices")],
         supports_check_mode=True,
     )
-
-    dest = module.params["dest"]
-    dest_exists = os.path.exists(dest)
-
-    # Determine whether we need to download (skip if file exists and force=False)
-    if dest_exists and not module.params["force"]:
-        module.exit_json(changed=False, dest=dest, snapshot_id=module.params["snapshot_id"])
-
-    method = "GET"
-    query_params = {}
-    body = None
-    path = f"/api/snapshots/{module.params['snapshot_id']}"
-
-    if module.params.get("include_devices") or module.params.get("exclude_devices") or module.params.get("obfuscation_key"):
-        method = "POST"
-        body = {}
-        if module.params.get("include_devices"):
-            body["includeDevices"] = module.params["include_devices"]
-        if module.params.get("exclude_devices"):
-            body["excludeDevices"] = module.params["exclude_devices"]
-        if module.params.get("obfuscation_key"):
-            body["obfuscationKey"] = module.params["obfuscation_key"]
-    elif module.params.get("only"):
-        query_params["only"] = module.params["only"]
-
+    p = module.params
+    dest = p["dest"]
+    exists = os.path.exists(dest)
+    if exists and not p["force"]:
+        module.exit_json(changed=False, dest=dest, snapshot_id=p["snapshot_id"])
     if module.check_mode:
-        module.exit_json(changed=not dest_exists, dest=dest, snapshot_id=module.params["snapshot_id"])
+        module.exit_json(changed=True, dest=dest, snapshot_id=p["snapshot_id"])
 
-    cfg = get_forward_config(module.params)
-    client = ForwardClient(
-        module,
-        base_url=cfg["base_url"],
-        token=cfg["token"],
-        username=cfg["username"],
-        password=cfg["password"],
-        validate_certs=cfg["validate_certs"],
-        timeout=cfg["timeout"],
-    )
-
+    client = sdk.get_client(module)
+    dest_dir = os.path.dirname(os.path.abspath(dest))
+    tmp_path = None
     try:
-        response = client.request(method=method, path=path, query_params=query_params, body=body)
-    except ForwardApiError as exc:
-        module.fail_json(msg=str(exc))
-
-    data = response.get("bytes")
-    if not data:
-        module.fail_json(msg="Snapshot export returned no data")
-
-    tmp_fd, tmp_path = tempfile.mkstemp(prefix="fwd_snapshot_", suffix=".zip")
-    os.close(tmp_fd)
-    try:
-        with open(tmp_path, "wb") as fh:
-            fh.write(data)
+        fd, tmp_path = tempfile.mkstemp(prefix=".fwd_snapshot_", suffix=".zip", dir=dest_dir)
+        os.close(fd)
+        client.snapshots.download(
+            p["snapshot_id"],
+            tmp_path,
+            only=p["only"],
+            include_devices=p["include_devices"],
+            exclude_devices=p["exclude_devices"],
+            obfuscation_key=p["obfuscation_key"],
+        )
+        if os.path.getsize(tmp_path) == 0:
+            module.fail_json(msg="Snapshot export returned no data")
         module.atomic_move(tmp_path, dest)
+    except OSError as exc:
+        module.fail_json(msg="Cannot write %s: %s" % (dest, exc))
+    except sdk.ForwardError as exc:
+        module.fail_json(msg=sdk.error_message(exc))
     finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-    module.exit_json(changed=True, dest=dest, snapshot_id=module.params["snapshot_id"])
+        client.close()
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+    module.exit_json(changed=True, dest=dest, snapshot_id=p["snapshot_id"])
 
 
 if __name__ == "__main__":

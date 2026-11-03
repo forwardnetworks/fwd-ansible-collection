@@ -1,0 +1,20 @@
+name: Release to Galaxy
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Build and publish
+        env:
+          GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
+        run: |
+          uv venv .venv --python 3.13
+          uv pip install --python .venv/bin/python ansible-core
+          cd ansible_collections/forwardnetworks/forward
+          ../../../.venv/bin/ansible-galaxy collection build --output-path /tmp/dist
+          ../../../.venv/bin/ansible-galaxy collection publish /tmp/dist/*.tar.gz --token "$GALAXY_API_KEY"

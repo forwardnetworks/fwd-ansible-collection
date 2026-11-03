@@ -2,128 +2,107 @@
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2024, Forward Networks
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: fwd_devices
-short_description: Retrieve Forward Networks device inventory
+short_description: List devices in a Forward Networks snapshot
 description:
-  - Fetches device inventory for a Forward Network (optionally a specific Snapshot) using GET /api/networks/{networkId}/devices.
-  - Supports common filters and query parameters, plus passthrough extra params for new API fields.
+  - Lists the devices in a network snapshot, optionally filtered by name, vendor, model, platform and so on.
+  - Without O(skip) or O(limit) every matching device is returned, fetched a page at a time.
 extends_documentation_fragment:
   - forwardnetworks.forward.auth
 options:
   network_id:
-    description: Forward network identifier.
+    description: Forward network ID. Falls back to E(FORWARD_NETWORK_ID).
     type: str
-    required: true
   snapshot_id:
-    description: Optional Snapshot identifier.
+    description: Snapshot ID. Defaults to the network's latest processed snapshot.
     type: str
   name:
-    description: Glob filter for the C(name) field.
+    description: Filter by device name (glob patterns allowed).
     type: str
   display_name:
-    description: Glob filter for the C(displayName) field.
+    description: Filter by display name.
     type: str
   source_name:
-    description: Glob filter for the C(sourceName) field.
+    description: Filter by source name.
     type: str
   device_type:
-    description: Glob filter for the C(type) field.
+    description: Filter by device type.
     type: str
   vendor:
-    description: Glob filter for the C(vendor) field.
+    description: Filter by vendor.
     type: str
   model:
-    description: Glob filter for the C(model) field.
+    description: Filter by model.
     type: str
   platform:
-    description: Glob filter for the C(platform) field.
+    description: Filter by platform.
     type: str
   os_version:
-    description: Glob filter for the C(osVersion) field.
+    description: Filter by OS version.
     type: str
   collection_error:
-    description: Glob filter for the C(collectionError) field.
+    description: Filter by collection error.
     type: str
   processing_error:
-    description: Glob filter for the C(processingError) field.
+    description: Filter by processing error.
     type: str
   skip:
-    description: Number of devices to skip (pagination).
+    description: Number of devices to skip. Setting this or O(limit) returns a single page instead of every device.
     type: int
   limit:
     description: Maximum number of devices to return.
     type: int
   include_tags:
-    description: Include device tags in the response.
+    description: Include each device's tags. Without it the C(tags) field is absent, which means "not requested".
     type: bool
     default: false
   extra_params:
-    description:
-      - Additional query parameters to pass through to the API.
-      - Keys/values must be strings (lists are converted to repeated params).
+    description: Additional filter parameters passed to the API unchanged.
     type: dict
-  devices_path:
-    description:
-      - Override API path. Defaults to C(/api/networks/{network_id}/devices).
-    type: str
-    default: /api/networks/{network_id}/devices
 author:
   - Forward Networks (@forwardnetworks)
 """
 
 EXAMPLES = r"""
-- name: Fetch all devices (latest Snapshot)
+- name: Core routers with their tags
   forwardnetworks.forward.fwd_devices:
-    network_id: "205507"
-  register: devices
-
-- name: Fetch devices with tags for a Snapshot
-  forwardnetworks.forward.fwd_devices:
-    network_id: "205507"
-    snapshot_id: "snap-123"
-    include_tags: true
+    network_id: "101"
     name: "core-*"
-  register: tagged_devices
+    include_tags: true
+  register: core
 """
 
 RETURN = r"""
 devices:
-  description: List of device objects returned by the API.
+  description: Device objects as Forward returns them (camelCase field names).
   type: list
   elements: dict
-  returned: always
-url:
-  description: Final request URL (including query params).
-  type: str
-  returned: always
-query_params:
-  description: Query parameters that were sent.
-  type: dict
-  returned: always
+  returned: success
+count:
+  description: Number of devices returned.
+  type: int
+  returned: success
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.client import ForwardApiError, ForwardClient
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.config import get_forward_config
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.device_filters import build_device_query
+from ansible_collections.forwardnetworks.forward.plugins.module_utils import sdk
+from ansible_collections.forwardnetworks.forward.plugins.module_utils.device_filters import build_device_filters
 
 
 def main():
     module = AnsibleModule(
         argument_spec={
             "base_url": {"type": "str"},
-            "token": {"type": "str", "no_log": True},
             "username": {"type": "str"},
             "password": {"type": "str", "no_log": True},
-            "validate_certs": {"type": "bool", "default": True},
-            "timeout": {"type": "int", "default": 30},
-            "network_id": {"type": "str", "required": True},
+            "validate_certs": {"type": "bool"},
+            "timeout": {"type": "float"},
+            "network_id": {"type": "str"},
             "snapshot_id": {"type": "str"},
             "name": {"type": "str"},
             "display_name": {"type": "str"},
@@ -139,31 +118,26 @@ def main():
             "limit": {"type": "int"},
             "include_tags": {"type": "bool", "default": False},
             "extra_params": {"type": "dict"},
-            "devices_path": {"type": "str", "default": "/api/networks/{network_id}/devices"},
         },
         supports_check_mode=True,
     )
-
-    query = build_device_query(module.params)
-    path_template = module.params.get("devices_path") or "/api/networks/{network_id}/devices"
-    path = path_template.format(network_id=module.params["network_id"], networkId=module.params["network_id"])
-
-    cfg = get_forward_config(module.params)
-
+    client = sdk.get_client(module)
+    p = module.params
+    filters = build_device_filters(p, p.get("extra_params"))
+    with_ = ["tags"] if p["include_tags"] else None
     try:
-        client = ForwardClient(
-            module,
-            base_url=cfg["base_url"],
-            token=cfg["token"],
-            username=cfg["username"],
-            password=cfg["password"],
-            validate_certs=cfg["validate_certs"],
-            timeout=cfg["timeout"],
-        )
-        out = client.request(method="GET", path=path, query_params=query)
-        module.exit_json(changed=False, devices=out.get("json") or [], url=out.get("url"), query_params=query)
-    except ForwardApiError as e:
-        module.fail_json(msg=str(e))
+        if p["skip"] is not None or p["limit"] is not None:
+            devices = client.devices.list(
+                p["network_id"], snapshot_id=p["snapshot_id"], skip=p["skip"], limit=p["limit"], with_=with_, **filters
+            )
+        else:
+            devices = list(client.devices.iter(p["network_id"], snapshot_id=p["snapshot_id"], with_=with_, **filters))
+    except sdk.ForwardError as exc:
+        module.fail_json(msg=sdk.error_message(exc))
+    finally:
+        client.close()
+    devices = sdk.to_plain(devices)
+    module.exit_json(changed=False, devices=devices, count=len(devices))
 
 
 if __name__ == "__main__":
