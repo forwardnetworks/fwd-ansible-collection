@@ -1,4 +1,7 @@
 plugin: forwardnetworks.forward.forward_networks
-# network_id: "<network id>"
-# If omitted, plugin reads the env var in `network_id_env` (default: FWD_NETWORKID).
-host_key: "name"
+# network_id: "<network id>"   # defaults to FORWARD_NETWORK_ID
+host_key: name
+include_tags: true
+keyed_groups:
+  - key: vendor
+    prefix: vendor

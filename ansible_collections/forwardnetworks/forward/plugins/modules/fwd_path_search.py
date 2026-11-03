@@ -2,47 +2,37 @@
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2024, Forward Networks
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: fwd_path_search
-short_description: Run Forward Networks path searches (single query)
+short_description: Trace a packet through a Forward Networks snapshot
 description:
-  - Executes a single Forward Networks path search using GET /api/networks/{networkId}/paths.
-  - Supports the majority of query parameters from the OpenAPI specification (intent, protocol headers, limits, snapshot, etc.).
-  - Ideal for pre/post intent verification workflows (reachability, segmentation, validation of blocks).
+  - "Runs a single path search: where would traffic from a source to a destination go in this snapshot?"
+  - Either O(from_device) or O(src_ip) is required.
 extends_documentation_fragment:
   - forwardnetworks.forward.auth
 options:
   network_id:
-    description: Forward network identifier.
+    description: Forward network ID. Falls back to E(FORWARD_NETWORK_ID).
     type: str
-    required: true
-  path:
-    description:
-      - API path template.
-      - Defaults to C(/api/networks/{network_id}/paths).
-    type: str
-    default: /api/networks/{network_id}/paths
   snapshot_id:
-    description: Optional snapshot identifier (query param C(snapshotId)).
+    description: Snapshot ID. Defaults to the network's latest processed snapshot.
     type: str
   from_device:
-    description:
-      - Device name from which the traffic originates (maps to query param C(from)).
-      - Either C(from_device) or C(src_ip) must be supplied.
+    description: Device (or device interface) the traffic starts from.
     type: str
   src_ip:
-    description: Source IP address or subnet (maps to query param C(srcIp)).
+    description: Source IP address or subnet.
     type: str
   dst_ip:
-    description: Destination IP address or subnet (maps to query param C(dstIp)).
+    description: Destination IP address or subnet.
     type: str
     required: true
   intent:
-    description: Search intent preference.
+    description: Which paths to prefer. C(PREFER_VIOLATIONS) finds drops, loops and blackholes; C(PREFER_DELIVERED) finds paths that deliver;
+      C(VIOLATIONS_ONLY) returns only non-delivered paths.
     type: str
     choices: [PREFER_VIOLATIONS, PREFER_DELIVERED, VIOLATIONS_ONLY]
     default: PREFER_DELIVERED
@@ -50,16 +40,16 @@ options:
     description: IP protocol number.
     type: int
   src_port:
-    description: L4 source port or range (string, e.g., C(8080-8088)).
+    description: Source port or range.
     type: str
   dst_port:
-    description: L4 destination port or range.
+    description: Destination port or range.
     type: str
   icmp_type:
-    description: ICMP type (implies IP protocol 1).
+    description: ICMP type.
     type: int
   fin:
-    description: TCP FIN flag (0 or 1, implies IP protocol 6).
+    description: TCP FIN flag (0 or 1).
     type: int
   syn:
     description: TCP SYN flag (0 or 1).
@@ -77,110 +67,88 @@ options:
     description: TCP URG flag (0 or 1).
     type: int
   app_id:
-    description: Layer-7 application identifier (maps to query param C(appId)).
+    description: Application ID.
     type: str
   user_id:
-    description: Layer-7 user-id (maps to query param C(userId)).
+    description: User ID.
     type: str
   user_group_id:
-    description: Layer-7 user-group-id (maps to query param C(userGroupId)).
+    description: User group ID.
     type: str
   url:
-    description: Layer-7 URL (maps directly to query param C(url)).
+    description: URL.
+    type: str
+  domain:
+    description: Domain name.
     type: str
   include_tags:
-    description: Include device tags for each hop.
+    description: Include tags in the response.
     type: bool
     default: false
   include_network_functions:
-    description: Include detailed network function info for each hop.
+    description: Include detailed forwarding info for each hop (slower).
     type: bool
     default: false
   max_candidates:
-    description: Upper bound on computed candidates (1-10000, default 5000).
+    description: Limit on results computed before ranking (1 to 10000).
     type: int
   max_results:
-    description: Upper bound on returned results (<= max_candidates, default 1).
+    description: Limit on results returned.
     type: int
   max_return_path_results:
-    description: Upper bound on return path results.
+    description: Limit on return path results.
     type: int
   max_seconds:
-    description: Timeout for the search (seconds, default 30).
+    description: Time limit for the search, in seconds.
     type: int
-  extra_params:
-    description: Additional query parameters (string key/value) for forward compatibility.
-    type: dict
 author:
   - Forward Networks (@forwardnetworks)
 """
 
 EXAMPLES = r"""
-- name: Ensure DMZ server is reachable from edge router
+- name: Can the web tier reach the database?
   forwardnetworks.forward.fwd_path_search:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') }}"
-    from_device: edge-router-1
-    dst_ip: 10.0.50.10
-    intent: PREFER_DELIVERED
-  register: path
-
-- name: Validate that traffic is blocked (violations only)
-  forwardnetworks.forward.fwd_path_search:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') }}"
-    src_ip: 10.10.10.0/24
-    dst_ip: 192.0.2.10
-    intent: VIOLATIONS_ONLY
-  register: block_check
-
-- name: Path search using explicit snapshot and protocol headers
-  forwardnetworks.forward.fwd_path_search:
-    network_id: "205507"
-    snapshot_id: "snap-123"
-    from_device: app-fw-1
-    dst_ip: 203.0.113.5
+    network_id: "101"
+    src_ip: 10.1.1.10
+    dst_ip: 10.2.2.20
     ip_proto: 6
-    dst_port: "443"
-    include_network_functions: true
-  register: https_path
+    dst_port: "5432"
+    intent: PREFER_VIOLATIONS
+  register: path
 """
 
 RETURN = r"""
-paths:
-  description: List of path objects returned by the API (`response["paths"]` when present).
-  type: list
-  returned: when supported
 response:
-  description: Full JSON payload returned by the API.
+  description: The full path search response.
   type: dict
-  returned: always
-url:
-  description: Final request URL (including rendered query parameters).
-  type: str
-  returned: always
-query_params:
-  description: Query parameters sent to the API.
-  type: dict
-  returned: always
+  returned: success
+paths:
+  description: The paths found (the C(paths) key of RV(response)).
+  type: list
+  elements: dict
+  returned: success
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.client import ForwardApiError, ForwardClient
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.config import get_forward_config
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.path_search import build_path_query
+from ansible_collections.forwardnetworks.forward.plugins.module_utils import sdk
+
+PASS_THROUGH = (
+    "src_ip", "intent", "ip_proto", "src_port", "dst_port", "icmp_type", "fin", "syn", "rst", "psh", "ack", "urg",
+    "app_id", "user_id", "user_group_id", "url", "domain", "max_candidates", "max_results", "max_return_path_results",
+    "max_seconds",
+)  # fmt: skip
 
 
 def main():
     module = AnsibleModule(
         argument_spec={
             "base_url": {"type": "str"},
-            "token": {"type": "str", "no_log": True},
             "username": {"type": "str"},
             "password": {"type": "str", "no_log": True},
-            "validate_certs": {"type": "bool", "default": True},
-            "timeout": {"type": "int", "default": 30},
-            "network_id": {"type": "str", "required": True},
-            "path": {"type": "str", "default": "/api/networks/{network_id}/paths"},
+            "validate_certs": {"type": "bool"},
+            "timeout": {"type": "float"},
+            "network_id": {"type": "str"},
             "snapshot_id": {"type": "str"},
             "from_device": {"type": "str"},
             "src_ip": {"type": "str"},
@@ -204,47 +172,38 @@ def main():
             "user_id": {"type": "str"},
             "user_group_id": {"type": "str"},
             "url": {"type": "str"},
+            "domain": {"type": "str"},
             "include_tags": {"type": "bool", "default": False},
             "include_network_functions": {"type": "bool", "default": False},
             "max_candidates": {"type": "int"},
             "max_results": {"type": "int"},
             "max_return_path_results": {"type": "int"},
             "max_seconds": {"type": "int"},
-            "extra_params": {"type": "dict"},
         },
+        required_one_of=[("from_device", "src_ip")],
         supports_check_mode=True,
     )
-
-    if not module.params.get("from_device") and not module.params.get("src_ip"):
-        module.fail_json(msg="Either from_device or src_ip must be provided for path search")
-
-    query = build_path_query(module.params)
-    path_template = module.params.get("path") or "/api/networks/{network_id}/paths"
-    path = path_template.format(network_id=module.params["network_id"], networkId=module.params["network_id"])
-
-    cfg = get_forward_config(module.params)
-
+    client = sdk.get_client(module)
+    p = module.params
+    kwargs = {name: p[name] for name in PASS_THROUGH if p.get(name) is not None}
+    if p["include_tags"]:
+        kwargs["include_tags"] = True
+    if p["include_network_functions"]:
+        kwargs["include_network_functions"] = True
     try:
-        client = ForwardClient(
-            module,
-            base_url=cfg["base_url"],
-            token=cfg["token"],
-            username=cfg["username"],
-            password=cfg["password"],
-            validate_certs=cfg["validate_certs"],
-            timeout=cfg["timeout"],
+        response = client.path_search.get_paths(
+            dst_ip=p["dst_ip"],
+            network_id=p["network_id"],
+            snapshot_id=p["snapshot_id"],
+            from_=p["from_device"],
+            **kwargs
         )
-        out = client.request(method="GET", path=path, query_params=query)
-        payload = out.get("json") or {}
-        module.exit_json(
-            changed=False,
-            response=payload,
-            paths=payload.get("paths"),
-            url=out.get("url"),
-            query_params=query,
-        )
-    except ForwardApiError as e:
-        module.fail_json(msg=str(e))
+    except sdk.ForwardError as exc:
+        module.fail_json(msg=sdk.error_message(exc))
+    finally:
+        client.close()
+    response = sdk.to_plain(response)
+    module.exit_json(changed=False, response=response, paths=response.get("paths"))
 
 
 if __name__ == "__main__":

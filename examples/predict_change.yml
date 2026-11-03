@@ -1,0 +1,67 @@
+---
+# Rehearse a change in Forward Predict before touching the network:
+# stage commands against a baseline, predict, then read the blast radius and intent checks.
+#
+# Predict endpoints are unpublished and gated by your Forward organization (see
+# https://forwardnetworks.github.io/forward-python-sdk/predict/ for the gating properties).
+- name: Forward Predict - rehearse a change
+  hosts: localhost
+  gather_facts: false
+  vars:
+    network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
+  tasks:
+    - name: Baseline snapshot (latest processed, predictions excluded)
+      forwardnetworks.forward.fwd_snapshots:
+        network_id: "{{ network_id }}"
+        latest_processed: true
+      register: baseline
+
+    - name: Stage and commit the change
+      forwardnetworks.forward.fwd_change_set:
+        network_id: "{{ network_id }}"
+        name: Core uplink shutdown
+        base_snapshot_id: "{{ baseline.snapshot_id }}"
+        commands:
+          dc-core: |
+            interface Ethernet1
+             shutdown
+        commit: true
+        commit_note: staged by ansible
+      register: change
+
+    - name: Run Predict and wait for the predicted snapshot
+      forwardnetworks.forward.fwd_predict:
+        network_id: "{{ network_id }}"
+        change_set_id: "{{ change.change_set_id }}"
+        note: rehearsal
+      register: predicted
+
+    - name: What would the change touch?
+      forwardnetworks.forward.fwd_predict_diff:
+        before: "{{ baseline.snapshot_id }}"
+        after: "{{ predicted.snapshot_id }}"
+      register: blast
+
+    - name: Show the blast radius
+      ansible.builtin.debug:
+        msg:
+          counts: "{{ blast.counts }}"
+          connectivity: "{{ blast.subnet_connectivity | default('not available') }}"
+          errors: "{{ blast.errors }}"
+
+    - name: Intent checks against the predicted snapshot
+      forwardnetworks.forward.fwd_snapshot_checks:
+        snapshot_id: "{{ predicted.snapshot_id }}"
+        status: [FAIL, ERROR]
+      register: failing
+
+    - name: Stop if the change would break an intent
+      ansible.builtin.assert:
+        that: failing.checks | length == 0
+        fail_msg: "The change would fail {{ failing.checks | length }} check(s)"
+
+    - name: Clean up the change set (also deletes its predicted snapshot)
+      forwardnetworks.forward.fwd_change_set:
+        network_id: "{{ network_id }}"
+        change_set_id: "{{ change.change_set_id }}"
+        state: absent

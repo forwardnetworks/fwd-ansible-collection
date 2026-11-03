@@ -1,28 +1,28 @@
 ---
+# Needs a live Forward instance: FORWARD_URL, FORWARD_USERNAME, FORWARD_PASSWORD and FORWARD_NETWORK_ID.
 - name: Forward Networks change control integration
   hosts: localhost
   gather_facts: false
   vars:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') }}"
+    network_id: "{{ lookup('env', 'FORWARD_NETWORK_ID') }}"
     query_id: "{{ lookup('env', 'FWD_QUERYID') | default('', true) }}"
     dst_ip: "{{ lookup('env', 'FWD_DST_IP') | default('', true) }}"
     from_device: "{{ lookup('env', 'FWD_FROM_DEVICE') | default('', true) }}"
     export_dest: "{{ lookup('env', 'FWD_EXPORT_DEST') | default('/tmp/fwd-snapshot.zip', true) }}"
   tasks:
     - name: Resolve latest processed snapshot
-      forwardnetworks.forward.fwd_snapshot_collect:
+      forwardnetworks.forward.fwd_snapshots:
         network_id: "{{ network_id }}"
-        start_collection: false
-        wait_for_new: false
+        latest_processed: true
       register: snapshot_info
 
     - name: Set snapshot_id fact
       ansible.builtin.set_fact:
         resolved_snapshot_id: "{{ snapshot_info.snapshot_id }}"
 
-    - name: Verify API
+    - name: Verify the generic API call
       forwardnetworks.forward.fwd_api:
-        path: /api/networks
+        operation: getNetworks
       register: api_result
 
     - name: Verify devices
@@ -39,7 +39,6 @@
       register: snapshots_result
 
     - name: Verify snapshot export (config-only)
-      when: resolved_snapshot_id is defined
       forwardnetworks.forward.fwd_snapshot_export:
         snapshot_id: "{{ resolved_snapshot_id }}"
         dest: "{{ export_dest }}"
@@ -62,7 +61,6 @@
       register: path_result
 
     - name: Verify snapshot checks
-      when: resolved_snapshot_id is defined
       forwardnetworks.forward.fwd_snapshot_checks:
         snapshot_id: "{{ resolved_snapshot_id }}"
       register: checks_result

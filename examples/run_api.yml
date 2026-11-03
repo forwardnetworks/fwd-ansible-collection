@@ -1,14 +1,13 @@
 ---
-- name: Forward Networks API example
+- name: Forward Networks generic API example
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Read an endpoint (example)
+    - name: List networks (any SDK operation works here)
       forwardnetworks.forward.fwd_api:
-        method: GET
-        path: /api/networks
+        operation: getNetworks
       register: out
 
     - name: Show response
       ansible.builtin.debug:
-        var: out
+        var: out.result

@@ -2,42 +2,38 @@
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2024, Forward Networks
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: fwd_snapshot_checks
-short_description: Retrieve Forward Networks snapshot checks
+short_description: Read intent check results for a Forward Networks snapshot
 description:
-  - Lists checks for a snapshot (C(GET /api/snapshots/{snapshotId}/checks)) or retrieves a specific check (C(/checks/{checkId})).
-  - Useful for pre/post automation that wants to validate existing intent checks.
+  - Returns the checks defined on a snapshot with their current status, optionally filtered by type, priority and status.
+  - With O(check_id) returns a single check including its diagnosis.
+  - Use it after a collection or a Predict run to gate a pipeline on check results.
 extends_documentation_fragment:
   - forwardnetworks.forward.auth
 options:
   snapshot_id:
-    description: Snapshot identifier to inspect.
+    description: Snapshot ID.
     type: str
     required: true
   check_id:
-    description: Optional check identifier. When set, only that check is returned.
+    description: Return only this check, with diagnosis.
     type: str
   type:
-    description:
-      - Filter by check type(s), e.g., C(NQE), C(Predefined).
-      - Matches the API C(type) parameter.
+    description: Only checks of these types.
     type: list
     elements: str
     choices: [Isolation, Reachability, Existential, QueryStringBased, Predefined, NQE]
   priority:
-    description: Filter checks by priority.
+    description: Only checks with these priorities.
     type: list
     elements: str
     choices: [NOT_SET, LOW, MEDIUM, HIGH]
   status:
-    description:
-      - Filter checks by execution status.
-      - Values NONE/PROCESSING are accepted but API never returns them.
+    description: Only checks with these statuses.
     type: list
     elements: str
     choices: [NONE, PASS, FAIL, ERROR, TIMEOUT, PROCESSING]
@@ -46,111 +42,73 @@ author:
 """
 
 EXAMPLES = r"""
-- name: List all checks for a snapshot
+- name: Failing high priority checks
   forwardnetworks.forward.fwd_snapshot_checks:
-    snapshot_id: "snap-123"
+    snapshot_id: "{{ post.snapshot_id }}"
+    priority: [HIGH]
+    status: [FAIL, ERROR]
+  register: failing
 
-- name: Get only failed NQE checks
-  forwardnetworks.forward.fwd_snapshot_checks:
-    snapshot_id: "snap-123"
-    type: ["NQE"]
-    status: ["FAIL"]
-
-- name: Get a specific check result
-  forwardnetworks.forward.fwd_snapshot_checks:
-    snapshot_id: "snap-123"
-    check_id: "19939965"
-  register: single_check
+- ansible.builtin.assert:
+    that: failing.checks | length == 0
 """
 
 RETURN = r"""
 checks:
-  description: List of check results (when C(check_id) is not provided).
+  description: Check results, as Forward returns them.
   type: list
   elements: dict
-  returned: when check_id is not provided
+  returned: when O(check_id) is not given
 check:
-  description: Single check result (when C(check_id) is provided).
+  description: A single check result with diagnosis.
   type: dict
-  returned: when check_id is provided
-url:
-  description: Request URL that was executed.
-  type: str
-  returned: always
-query_params:
-  description: Query parameters sent to the API.
-  type: dict
-  returned: always
+  returned: when O(check_id) is given
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.client import ForwardApiError, ForwardClient
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.config import get_forward_config
+from ansible_collections.forwardnetworks.forward.plugins.module_utils import sdk
 
 
 def main():
     module = AnsibleModule(
         argument_spec={
             "base_url": {"type": "str"},
-            "token": {"type": "str", "no_log": True},
             "username": {"type": "str"},
             "password": {"type": "str", "no_log": True},
-            "validate_certs": {"type": "bool", "default": True},
-            "timeout": {"type": "int", "default": 30},
+            "validate_certs": {"type": "bool"},
+            "timeout": {"type": "float"},
             "snapshot_id": {"type": "str", "required": True},
             "check_id": {"type": "str"},
-            "type": {"type": "list", "elements": "str", "choices": ["Isolation", "Reachability", "Existential", "QueryStringBased", "Predefined", "NQE"]},
+            "type": {
+                "type": "list",
+                "elements": "str",
+                "choices": ["Isolation", "Reachability", "Existential", "QueryStringBased", "Predefined", "NQE"],
+            },
             "priority": {"type": "list", "elements": "str", "choices": ["NOT_SET", "LOW", "MEDIUM", "HIGH"]},
-            "status": {"type": "list", "elements": "str", "choices": ["NONE", "PASS", "FAIL", "ERROR", "TIMEOUT", "PROCESSING"]},
+            "status": {
+                "type": "list",
+                "elements": "str",
+                "choices": ["NONE", "PASS", "FAIL", "ERROR", "TIMEOUT", "PROCESSING"],
+            },
         },
+        mutually_exclusive=[("check_id", "type"), ("check_id", "priority"), ("check_id", "status")],
         supports_check_mode=True,
     )
-
-    cfg = get_forward_config(module.params)
-    client = ForwardClient(
-        module,
-        base_url=cfg["base_url"],
-        token=cfg["token"],
-        username=cfg["username"],
-        password=cfg["password"],
-        validate_certs=cfg["validate_certs"],
-        timeout=cfg["timeout"],
-    )
-
-    snapshot_id = module.params["snapshot_id"]
-    check_id = module.params.get("check_id")
-
-    path = f"/api/snapshots/{snapshot_id}/checks"
-    if check_id:
-        path = f"{path}/{check_id}"
-
-    query_params = {}
-    for key in ("type", "priority", "status"):
-        value = module.params.get(key)
-        if value:
-            query_params[key] = value
-
+    client = sdk.get_client(module)
+    p = module.params
     try:
-        response = client.request(method="GET", path=path, query_params=query_params)
-    except ForwardApiError as exc:
-        module.fail_json(msg=str(exc))
-
-    payload = response.get("json")
-    if check_id:
-        module.exit_json(
-            changed=False,
-            check=payload,
-            url=response.get("url"),
-            query_params=query_params,
+        if p["check_id"]:
+            check = client.checks.get_check(snapshot_id=p["snapshot_id"], check_id=p["check_id"])
+            module.exit_json(changed=False, check=sdk.to_plain(check))
+        checks = client.checks.get_checks(
+            snapshot_id=p["snapshot_id"], type=p["type"], priority=p["priority"], status=p["status"]
         )
-
-    module.exit_json(
-        changed=False,
-        checks=payload or [],
-        url=response.get("url"),
-        query_params=query_params,
-    )
+    except sdk.ForwardError as exc:
+        module.fail_json(msg=sdk.error_message(exc))
+    finally:
+        client.close()
+    module.exit_json(changed=False, checks=sdk.to_plain(checks))
 
 
 if __name__ == "__main__":

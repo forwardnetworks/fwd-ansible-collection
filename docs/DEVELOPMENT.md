@@ -1,53 +1,37 @@
 # Development
 
-## Local collection usage
-
-This repo includes `ansible.cfg` setting:
-
-- `collections_paths = ./ansible_collections`
-
-So running playbooks from the repo root will use the local collection automatically.
-
-## Suggested validation
-
-If you have `ansible-test` available:
+## Environment
 
 ```bash
-cd ansible_collections/forwardnetworks/forward
-ansible-test sanity --docker default
+make venv     # .venv with ansible-core, pytest and forward-sdk
 ```
 
-## Local env file (development)
+`ansible.cfg` sets `collections_path = .`, so running playbooks from the repo root uses the local collection without installing it. To work against a local SDK checkout instead of PyPI: `uv pip install --python .venv/bin/python -e ~/src/forward-python-sdk`.
 
-This repo expects you to keep secrets out of git. Use:
+Credentials: copy `.env.example` to `.env` (gitignored) and `set -a; . ./.env; set +a`.
 
-- `.env.example` as a template
-- create a local `.env` file (gitignored)
-
-In your shell:
+## Checks
 
 ```bash
-set -a; . ./.env; set +a
-export FORWARD_BASE_URL="$FWD_HOST"
-export FORWARD_USERNAME="$FWD_USER"
-export FORWARD_PASSWORD="$FWD_PASS"
+make compile   # byte-compile plugins
+make units     # ansible-test units (installs tests/unit/requirements.txt in a venv)
+make sanity    # ansible-test sanity in a venv; use --docker default for the container images
+make test      # units + sanity
 ```
 
-## Helpful make targets
+Plain pytest also works from the repo root: `PYTHONPATH=. .venv/bin/python -m pytest ansible_collections/forwardnetworks/forward/tests/unit`.
 
-```bash
-make compile            # byte-compile plugins for quick syntax validation
-make example-api        # run examples/run_api.yml (sources .env automatically)
-make example-inventory  # run ansible-inventory using examples/inventory.forward.yml
-```
+Module tests run each module's `main()` against `forward_sdk.testing.ForwardRecorder`, which scripts the HTTP responses under the real SDK transport, so they fail if the SDK changes how it talks to Forward. `tests/integration/test_change_control.yml` needs a live Forward instance. `tests/output/` is generated and gitignored.
+
+Supported ansible-core: 2.17 and newer. The unit tests and an end-to-end module and inventory run were checked on 2.17 to 2.22; `ansible-test sanity` was run on the latest.
+
+## Adding a module
+
+- Build the client and handle errors through `module_utils/sdk.py` (`get_client`, `to_plain`, `error_message`), so a missing package produces the install hint. Import other SDK names (such as `QueryRef`) lazily inside `main()`, after `get_client`.
+- Write the connection options explicitly in `argument_spec` (validate-modules cannot follow a shared dict) and extend the `forwardnetworks.forward.auth` fragment in the docs.
+- Return plain data with `sdk.to_plain`, which keeps Forward's camelCase field names.
+- Add a test beside the existing ones that scripts the responses and asserts on the request the SDK sent.
 
 ## Intent baselines
 
-- Baseline artifacts are stored under `./baselines/` (gitignored by default).
-- Use `examples/nqe_intent.yml` to capture a baseline (first run) and compare subsequent runs using the `nqe_diff` filter.
-- See `examples/change_control.yml` for a full change-control workflow (pre/post snapshot + comparisons).
-
-## Testing
-
-- Sanity: `make sanity` (runs `ansible-test sanity` in Docker).
-- Unit tests: `ansible-test units --python 3.11` (tests under `tests/unit/` cover helper utilities/filters).
+Baselines from `examples/nqe_intent.yml` are written under `./baselines/` (gitignored).

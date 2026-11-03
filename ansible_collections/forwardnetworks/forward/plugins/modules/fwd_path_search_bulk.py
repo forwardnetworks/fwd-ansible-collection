@@ -2,149 +2,129 @@
 # -*- coding: utf-8 -*-
 # Copyright: (c) 2024, Forward Networks
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
-
 from __future__ import annotations
 
 DOCUMENTATION = r"""
 ---
 module: fwd_path_search_bulk
-short_description: Run multiple Forward Networks path searches in one request
+short_description: Run several Forward Networks path searches in one request
 description:
-  - Executes C(/api/networks/{networkId}/paths-bulk) with a list of query definitions.
-  - Each query supports the same fields as M(forwardnetworks.forward.fwd_path_search) (from device/src IP, headers, intent, etc.).
-  - Useful for pre/post intent testing where several flows should succeed/fail atomically.
+  - Runs a list of path searches against one snapshot in a single call.
+  - Useful for pre and post change checks where a set of flows should all be delivered or all be blocked.
+  - The settings O(intent), O(include_tags), O(include_network_functions), O(max_candidates), O(max_results), O(max_return_path_results) and
+    O(max_seconds) apply to every query.
 extends_documentation_fragment:
   - forwardnetworks.forward.auth
 options:
   network_id:
-    description: Forward network identifier.
+    description: Forward network ID. Falls back to E(FORWARD_NETWORK_ID).
     type: str
-    required: true
-  path:
-    description:
-      - API path template.
-      - Defaults to C(/api/networks/{network_id}/paths-bulk).
-    type: str
-    default: /api/networks/{network_id}/paths-bulk
   snapshot_id:
-    description: Optional snapshot identifier (applies to all queries).
+    description: Snapshot ID. Defaults to the network's latest processed snapshot.
     type: str
   queries:
     description:
-      - List of query definitions. Each dict accepts the same keys as M(forwardnetworks.forward.fwd_path_search).
-      - 'Required keys per entry: C(dst_ip), plus C(from_device) or C(src_ip).'
+      - List of queries. Each entry needs C(dst_ip) and either C(from_device) or C(src_ip).
+      - Other keys per entry are C(ip_proto), C(src_port), C(dst_port), C(icmp_type), C(fin), C(syn), C(rst), C(psh), C(ack), C(urg), C(app_id),
+        C(user_id), C(user_group_id) and C(url).
+      - A C(name) key is allowed as a label and is not sent to Forward.
     type: list
     elements: dict
     required: true
+  intent:
+    description: Which paths to prefer, for all queries.
+    type: str
+    choices: [PREFER_VIOLATIONS, PREFER_DELIVERED, VIOLATIONS_ONLY]
+  include_tags:
+    description: Include tags in the responses.
+    type: bool
+  include_network_functions:
+    description: Include detailed forwarding info for each hop (slower).
+    type: bool
+  max_candidates:
+    description: Limit on results computed per query before ranking.
+    type: int
+  max_results:
+    description: Limit on results returned per query.
+    type: int
+  max_return_path_results:
+    description: Limit on return path results per query.
+    type: int
+  max_seconds:
+    description: Time limit for the whole request, in seconds.
+    type: int
 author:
   - Forward Networks (@forwardnetworks)
 """
 
 EXAMPLES = r"""
-- name: Evaluate multiple flows
+- name: Check the critical flows
   forwardnetworks.forward.fwd_path_search_bulk:
-    network_id: "{{ lookup('env', 'FWD_NETWORKID') }}"
+    network_id: "101"
+    intent: PREFER_VIOLATIONS
     queries:
-      - name: "Edge to DMZ web"
-        from_device: edge-router-1
-        dst_ip: 10.0.50.10
-        intent: PREFER_DELIVERED
-      - name: "App server blocked from DB"
-        src_ip: 10.20.40.0/24
-        dst_ip: 172.16.5.10
-        intent: VIOLATIONS_ONLY
-  register: bulk_paths
-
-- name: Assert DMZ path exists
-  ansible.builtin.assert:
-    that:
-      - (bulk_paths.results[0].paths | length) > 0
+      - {src_ip: 10.1.1.10, dst_ip: 10.2.2.20, ip_proto: 6, dst_port: "443"}
+      - {from_device: edge1, dst_ip: 8.8.8.8}
+  register: flows
 """
 
 RETURN = r"""
 results:
-  description: List with one entry per query. Each entry is either a C(PathSearchResponse) dict or an error dict.
+  description: One path search response per query, in order.
   type: list
-  returned: always
-url:
-  description: Final request URL (query params include network/snapshot).
-  type: str
-  returned: always
-query_params:
-  description: Query parameters sent alongside the POST request (currently only snapshotId when set).
-  type: dict
-  returned: always
+  elements: dict
+  returned: success
 """
 
 from ansible.module_utils.basic import AnsibleModule
 
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.client import ForwardApiError, ForwardClient
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.config import get_forward_config
-from ansible_collections.forwardnetworks.forward.plugins.module_utils.path_search import build_path_query
-
-
-REQUIRED_PER_QUERY = ("dst_ip",)
-
-
-def validate_query(module: AnsibleModule, query: dict, index: int):
-    if not query:
-        module.fail_json(msg=f"Query at index {index} is empty", query_index=index)
-    if not (query.get("from_device") or query.get("src_ip")):
-        module.fail_json(msg="Each query needs from_device or src_ip", query_index=index)
-    for key in REQUIRED_PER_QUERY:
-        if not query.get(key):
-            module.fail_json(msg=f"Query at index {index} missing required field: {key}", query_index=index)
+from ansible_collections.forwardnetworks.forward.plugins.module_utils import sdk
+from ansible_collections.forwardnetworks.forward.plugins.module_utils.path_search import (
+    SHARED_FIELDS,
+    build_bulk_body,
+    validate_query,
+)
 
 
 def main():
     module = AnsibleModule(
         argument_spec={
             "base_url": {"type": "str"},
-            "token": {"type": "str", "no_log": True},
             "username": {"type": "str"},
             "password": {"type": "str", "no_log": True},
-            "validate_certs": {"type": "bool", "default": True},
-            "timeout": {"type": "int", "default": 30},
-            "network_id": {"type": "str", "required": True},
-            "path": {"type": "str", "default": "/api/networks/{network_id}/paths-bulk"},
+            "validate_certs": {"type": "bool"},
+            "timeout": {"type": "float"},
+            "network_id": {"type": "str"},
             "snapshot_id": {"type": "str"},
             "queries": {"type": "list", "elements": "dict", "required": True},
+            "intent": {"type": "str", "choices": ["PREFER_VIOLATIONS", "PREFER_DELIVERED", "VIOLATIONS_ONLY"]},
+            "include_tags": {"type": "bool"},
+            "include_network_functions": {"type": "bool"},
+            "max_candidates": {"type": "int"},
+            "max_results": {"type": "int"},
+            "max_return_path_results": {"type": "int"},
+            "max_seconds": {"type": "int"},
         },
         supports_check_mode=True,
     )
-
-    queries = module.params["queries"] or []
+    p = module.params
+    queries = p["queries"] or []
     if not queries:
         module.fail_json(msg="At least one query must be provided")
+    for index, query in enumerate(queries):
+        error = validate_query(query, index)
+        if error:
+            module.fail_json(msg=error)
+    body = build_bulk_body(queries, {name: p[name] for name in SHARED_FIELDS})
 
-    built_queries = []
-    for idx, query in enumerate(queries):
-        validate_query(module, query, idx)
-        built_queries.append(build_path_query(query, include_snapshot=False))
-
-    query_params = {}
-    if module.params.get("snapshot_id"):
-        query_params["snapshotId"] = module.params["snapshot_id"]
-
-    path_template = module.params.get("path") or "/api/networks/{network_id}/paths-bulk"
-    path = path_template.format(network_id=module.params["network_id"], networkId=module.params["network_id"])
-
-    cfg = get_forward_config(module.params)
-
+    client = sdk.get_client(module)
     try:
-        client = ForwardClient(
-            module,
-            base_url=cfg["base_url"],
-            token=cfg["token"],
-            username=cfg["username"],
-            password=cfg["password"],
-            validate_certs=cfg["validate_certs"],
-            timeout=cfg["timeout"],
-        )
-        out = client.request(method="POST", path=path, query_params=query_params, body=built_queries)
-        module.exit_json(changed=False, results=out.get("json"), url=out.get("url"), query_params=query_params)
-    except ForwardApiError as e:
-        module.fail_json(msg=str(e))
+        results = client.path_search.get_paths_bulk(body=body, network_id=p["network_id"], snapshot_id=p["snapshot_id"])
+    except sdk.ForwardError as exc:
+        module.fail_json(msg=sdk.error_message(exc))
+    finally:
+        client.close()
+    module.exit_json(changed=False, results=sdk.to_plain(results))
 
 
 if __name__ == "__main__":

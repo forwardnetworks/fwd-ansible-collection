@@ -1,5 +1,10 @@
+# -*- coding: utf-8 -*-
+# Copyright: (c) 2024, Forward Networks
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+"""Device list filters shared by the ``fwd_devices`` module and the inventory plugin."""
 from __future__ import annotations
 
+# snake_case option -> the query parameter Forward's device listing accepts.
 DEVICE_FILTER_TO_PARAM = {
     "name": "name",
     "display_name": "displayName",
@@ -14,33 +19,12 @@ DEVICE_FILTER_TO_PARAM = {
 }
 
 
-def build_device_query(params: dict, extra_params: dict | None = None) -> dict:
+def build_device_filters(params, extra_params=None):
+    """Translate filter options into the keyword filters ``client.devices.list`` takes.
+
+    Unset options are dropped. ``extra_params`` are passed through unchanged for
+    filters this collection does not name.
     """
-    Build query parameters for /api/networks/{networkId}/devices.
-    `params` should use snake_case option names (name, display_name, etc).
-    """
-    query = {}
-
-    for option, api_field in DEVICE_FILTER_TO_PARAM.items():
-        value = params.get(option)
-        if value:
-            query[api_field] = value
-
-    # Common pagination / extras.
-    for key in ("skip", "limit"):
-        if params.get(key) is not None:
-            query[key] = params[key]
-
-    snapshot_id = params.get("snapshot_id") or params.get("snapshotId")
-    if snapshot_id:
-        query["snapshotId"] = snapshot_id
-
-    if params.get("include_tags"):
-        query["with"] = "tags"
-
-    # Additional passthrough parameters.
-    extra = extra_params or params.get("extra_params") or {}
-    for key, value in extra.items():
-        query[key] = value
-
-    return query
+    filters = {api: params[option] for option, api in DEVICE_FILTER_TO_PARAM.items() if params.get(option)}
+    filters.update(extra_params or {})
+    return filters
