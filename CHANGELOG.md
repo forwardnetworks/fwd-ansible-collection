@@ -7,6 +7,7 @@ Rebuilt on [forward-sdk](https://github.com/forwardnetworks/forward-python-sdk).
 ### Added
 
 - `fwd_nqe_diff`, `fwd_nqe_library`, `fwd_networks`, `fwd_network`, `fwd_device_tag`, `fwd_snapshot`, `fwd_snapshot_upload`.
+- `fwd_location`, `fwd_collection_schedule`, `fwd_webhook`: idempotent settings modules. Credentials are not covered yet, because Forward never returns secrets and a rerun could not tell whether one changed.
 - Forward Predict: `fwd_change_set`, `fwd_predict`, `fwd_predict_diff`, `fwd_change_set_checks`.
 - `fwd_api` can run any Forward operation by ID (needs `forward-sdk>=0.1.32`).
 - `fwd_snapshots`: `latest_processed` (predictions excluded unless `include_predicted`) and `snapshot_id` in the result.

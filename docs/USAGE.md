@@ -76,6 +76,7 @@ Every device field becomes a host variable. Enable the plugin in `ansible.cfg` i
 
 - `fwd_network` ensures a network exists by name (or deletes one); `fwd_networks` lists and filters. Deleting a network deletes its snapshots.
 - `fwd_device_tag` is idempotent: it creates the tag, adds only devices that lack it, and with `exclusive: true` removes it from others. Without `devices`, `state: absent` deletes the tag.
+- `fwd_location`, `fwd_collection_schedule` and `fwd_webhook` correct only the fields you set. Schedules have no name, so reruns match on identical settings or an explicit `schedule_id`. A webhook password cannot be read back, so it is sent on create or when other fields change, or on every run with `update_password: always`.
 - `fwd_snapshot_upload` pushes ZIP archives into a network and waits for processing; `fwd_snapshot` deletes, reprocesses or annotates an existing one.
 - `fwd_nqe_library` publishes queries to the library in one commit, skipping unchanged ones. Validate with `dry_run_snapshot_id`. `fwd_nqe_diff` compares a *committed* query across two snapshots.
 
@@ -83,4 +84,4 @@ Other Forward operations (locations, collection schedules, webhooks, credentials
 
 ## Check mode
 
-Read-only modules run in check mode. Modules that change something (`fwd_snapshot_collect`, `fwd_snapshot_export`, `fwd_snapshot_upload`, `fwd_snapshot`, `fwd_network`, `fwd_device_tag`, `fwd_nqe_library`, `fwd_change_set`, `fwd_predict`) report `changed` and do nothing.
+Read-only modules run in check mode. Modules that change something (`fwd_snapshot_collect`, `fwd_snapshot_export`, `fwd_snapshot_upload`, `fwd_snapshot`, `fwd_network`, `fwd_device_tag`, `fwd_location`, `fwd_collection_schedule`, `fwd_webhook`, `fwd_nqe_library`, `fwd_change_set`, `fwd_predict`) report `changed` and do nothing.

@@ -29,6 +29,9 @@ The modules call the Forward API, not your devices, so run them on a host that c
 | `fwd_nqe_library` | Publish NQE queries (inline or from `.nqe` files) to the query library |
 | `fwd_networks` / `fwd_network` | List networks; create or delete one (idempotent by name) |
 | `fwd_device_tag` | Manage device tags and their membership (idempotent) |
+| `fwd_location` | Create, correct or delete a map location (idempotent by name) |
+| `fwd_collection_schedule` | Manage scheduled collections (matches identical settings, or an ID) |
+| `fwd_webhook` | Manage webhooks (idempotent by name; the password is write-only, see `update_password`) |
 | `fwd_path_search` / `fwd_path_search_bulk` | Trace one packet, or many flows in one call |
 | `fwd_change_set` | Create, stage and commit a Forward Predict change set |
 | `fwd_predict` | Run Predict and get the predicted snapshot |
